@@ -66,12 +66,12 @@ class SocketConnectionActor(val connection: Connection, settings: ServerSettings
         val eventPipeline: EPL = {
           case IOBridge.Received(connection, buffer) if ready =>
             import model.OpCode._
-            val frame = model.Frame.make(buffer)
+            val frame = model.Frame.read(buffer)
             println(frame)
             frame match{
               case f @ Frame(_, _, ConnectionCloseFrame, _, _) =>
                 val newF = f.copy(maskingKey = None)
-                commandPL(IOConnection.Send(ByteBuffer.wrap(newF.write)))
+                commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(newF))))
               case Frame(_, _, PingFrame, _, _) => ()
               case Frame(_, _, PongFrame, _, _) => ()
               case f @ Frame(false, _, opcode, _, _)
@@ -82,7 +82,8 @@ class SocketConnectionActor(val connection: Connection, settings: ServerSettings
               case f @ Frame(true, _, opcode, _, _)
                 if opcode == TextFrame || opcode == BinaryFrame =>
                 val newF = f.copy(maskingKey = None, data = f.stringData.toUpperCase.getBytes("UTF-8"))
-                commandPL(IOConnection.Send(ByteBuffer.wrap(newF.write)))
+
+                commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(newF))))
             }
 
           case x => eventPL(x)
