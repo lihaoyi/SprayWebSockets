@@ -1,12 +1,5 @@
 package websockets.model
 
-/**
- * Created with IntelliJ IDEA.
- * User: Haoyi
- * Date: 1/22/13
- * Time: 2:50 AM
- * To change this template use File | Settings | File Templates.
- */
 class OpCode(val value: Byte)
 object OpCode{
   def apply(n: Int) = n match{

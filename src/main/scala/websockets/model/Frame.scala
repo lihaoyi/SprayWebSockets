@@ -1,26 +1,9 @@
 package websockets.model
 
 import websockets.model.Frame.BitWriter
+import java.nio.ByteBuffer
 
 object Frame{
-  class BitReader(in: Array[Byte]){
-    private[this] var cursor = 0
-    def getCursor = cursor
-    def bit: Boolean = {
-      val res = (in(cursor / 8) & (128 >> (cursor % 8))) != 0
-      cursor += 1
-      res
-    }
-    def bits(n: Int): Long = {
-      var total = 0L
-      var count = 0
-      while(count < n){ count += 1
-        total *= 2
-        if (bit) total += 1
-      }
-      total
-    }
-  }
   class BitWriter{
     private[this] var out: List[Byte] = Nil
     private[this] var cursor = 0
@@ -42,33 +25,43 @@ object Frame{
     }
   }
 
-  def make(in: Array[Byte]) = {
-    val s = new BitReader(in)
-    import s._
+  def make(in: ByteBuffer) = {
 
-    val FIN = bit
-    val RSV = (bit, bit, bit)
-    val opcode = bits(4).toByte
-    val mask = bit
-    val payloadLength = bits(7) match{
-      case 126 => 126 + bits(16)
-      case 127 => 127 + bits(64)
+
+    val b0 = in.get
+    val FIN = ((b0 >> 7) & 1) != 0
+    val RSV = (
+      ((b0 >> 6) & 1) != 0,
+      ((b0 >> 5) & 1) != 0,
+      ((b0 >> 4) & 1) != 0
+    )
+    val opcode = b0 & 0xf
+    val b1 = in.get
+    val mask = (b1 >> 7) & 1
+    val payloadLength = (b1 & 127) match{
+      case 126 => 126 + in.getShort
+      case 127 => 127 + in.getLong
       case x => x
     }
-    val maskingKey = if (mask) Some(bits(32).toInt) else None
 
-    val data =
-      in.drop(getCursor / 8)
-        .take(payloadLength.toInt)
-        .zipWithIndex
-        .map {case (b, i) =>
-          val j = 3 - i % 4
-          (b ^ ((maskingKey.getOrElse(0) >> (8 * j)) & 0xff)).toByte
-        }
+    val maskingKey = if (mask != 0) Some(in.getInt) else None
+
+
+    val data = new Array[Byte](payloadLength.toInt)
+    in.get(data)
+
+    for{
+      m <- maskingKey
+      i <- 0 until data.length
+    }{
+      val j = 3 - i % 4
+      data(i) = (data(i) ^ (m >> (8 * j)) & 0xff).toByte
+    }
 
     Frame(FIN, RSV, OpCode(opcode), maskingKey, data)
   }
 }
+
 case class Frame(FIN: Boolean,
                  RSV: (Boolean, Boolean, Boolean),
                  opcode: OpCode,

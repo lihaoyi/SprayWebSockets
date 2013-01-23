@@ -66,7 +66,7 @@ class SocketConnectionActor(val connection: Connection, settings: ServerSettings
         val eventPipeline: EPL = {
           case IOBridge.Received(connection, buffer) if ready =>
             import model.OpCode._
-            val frame = model.Frame.make(buffer.array)
+            val frame = model.Frame.make(buffer)
             println(frame)
             frame match{
               case f @ Frame(_, _, ConnectionCloseFrame, _, _) =>
