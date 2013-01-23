@@ -7,8 +7,16 @@ package websockets.model
  * Time: 2:50 AM
  * To change this template use File | Settings | File Templates.
  */
-class OpCode(value: Byte)
+class OpCode(val value: Byte)
 object OpCode{
+  def apply(n: Int) = n match{
+    case 0 => ContinuationFrame
+    case 1 => TextFrame
+    case 2 => BinaryFrame
+    case 8 => ConnectionCloseFrame
+    case 9 => PingFrame
+    case 10 => PongFrame
+  }
   object ContinuationFrame extends OpCode(0)
   object TextFrame extends OpCode(1)
   object BinaryFrame extends OpCode(2)
