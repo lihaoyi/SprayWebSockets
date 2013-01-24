@@ -3,19 +3,19 @@ package spray.can.server.websockets.model
 class OpCode(val value: Byte)
 object OpCode{
   def apply(n: Int) = n match{
-    case 0 => ContinuationFrame
-    case 1 => TextFrame
-    case 2 => BinaryFrame
-    case 8 => ConnectionCloseFrame
-    case 9 => PingFrame
-    case 10 => PongFrame
+    case 0 => Continuation
+    case 1 => Text
+    case 2 => Binary
+    case 8 => ConnectionClose
+    case 9 => Ping
+    case 10 => Pong
   }
-  object ContinuationFrame extends OpCode(0)
-  object TextFrame extends OpCode(1)
-  object BinaryFrame extends OpCode(2)
-  object ConnectionCloseFrame extends OpCode(8)
-  object PingFrame extends OpCode(9)
-  object PongFrame extends OpCode(10)
+  object Continuation extends OpCode(0)
+  object Text extends OpCode(1)
+  object Binary extends OpCode(2)
+  object ConnectionClose extends OpCode(8)
+  object Ping extends OpCode(9)
+  object Pong extends OpCode(10)
 }
 class CloseCode(statusCode: Int)
 object CloseCode{

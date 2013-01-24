@@ -85,6 +85,9 @@ object Frame{
     out.write(data)
     byteOutStream.toByteArray
   }
+
+  def ping(data: Array[Byte]) = Frame(true, (false, false, false), OpCode.Ping, None, data)
+  def pong(data: Array[Byte]) = Frame(true, (false, false, false), OpCode.Pong, None, data)
 }
 
 case class Frame(FIN: Boolean,
