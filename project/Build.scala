@@ -22,6 +22,7 @@ object Build extends sbt.Build{
         "com.typesafe.akka"       %%  "akka-testkit"    % "2.1.0" % "test",
         "io.spray"                %%  "spray-json"    % "1.2.3",
         "io.spray"                %  "spray-httpx"    % "1.1-20130108",
+        "io.spray"                %  "spray-client"    % "1.1-20130108",
         "org.scalatest" % "scalatest_2.10.0" % "2.0.M5" % "test",
         "org.seleniumhq.selenium" % "selenium-java" % "2.28.0" % "test"
       )

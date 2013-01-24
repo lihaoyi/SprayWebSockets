@@ -1,4 +1,4 @@
-package websockets.model
+package spray.can.server.websockets.model
 
 import java.nio.ByteBuffer
 import java.io.{DataOutputStream, ByteArrayOutputStream}

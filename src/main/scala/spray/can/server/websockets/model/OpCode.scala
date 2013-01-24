@@ -1,4 +1,4 @@
-package websockets.model
+package spray.can.server.websockets.model
 
 class OpCode(val value: Byte)
 object OpCode{
