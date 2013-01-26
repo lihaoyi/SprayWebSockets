@@ -19,15 +19,15 @@ import spray.http.HttpResponse
 import spray.can.HttpCommand
 
 class SocketServer(handlerMaker: => ActorRef,
-                   accepter: Either[MessageHandler, HttpRequest => (HttpResponse, Boolean)],
+                   accepter: Either[MessageHandler, HttpRequest => HttpResponse],
                    settings: ServerSettings = ServerSettings())
                   (implicit sslEngineProvider: ServerSSLEngineProvider)
                    extends IOServer with ConnectionActors {
-
+  HttpServer
   val acceptHandler = accepter.fold(x => x, func => SingletonHandler(context.actorOf(Props(new Actor{
     def receive = {
       case req @ HttpRequest(method, uri, headers, entity, protocol) =>
-        val (response, newReady) = func(req)
+        val response = func(req)
         sender ! response
     }
   }))))
@@ -38,10 +38,9 @@ class SocketServer(handlerMaker: => ActorRef,
 }
 
 object SocketServer{
-  val Frame = model.Frame
 
   def apply(handlerMaker: => ActorRef,
-            acceptFunction: HttpRequest => (HttpResponse, Boolean) = SocketConnectionActor.acceptAllFunction,
+            acceptFunction: HttpRequest => HttpResponse = SocketConnectionActor.acceptAllFunction,
             settings: ServerSettings = ServerSettings())
            (implicit sslEngineProvider: ServerSSLEngineProvider): SocketServer = {
     new SocketServer(handlerMaker, Right(acceptFunction), settings)
@@ -75,11 +74,10 @@ object SocketConnectionActor{
   )
 
   def acceptAllFunction(x: HttpRequest) = {
-    val response = HttpResponse(
+    HttpResponse(
       StatusCodes.SwitchingProtocols,
       headers = socketAcceptHeaders(calculateReturnHash(x.headers).get)
     )
-    (response, true)
   }
 }
 
@@ -89,7 +87,7 @@ class SocketConnectionActor(val connection: Connection,
                             settings: ServerSettings = ServerSettings())
                            (implicit sslEngineProvider: ServerSSLEngineProvider) extends IOConnection {
 
-  val statsHolder: Option[StatsHolder] = if (settings.StatsSupport) Some(new StatsHolder) else None
+  val statsHolder = if (settings.StatsSupport) Some(new StatsHolder) else None
 
   var pipelineStage = HttpServer.pipelineStage(settings, acceptHandler, SocketServer.defaultTimeoutResponse, statsHolder)
 

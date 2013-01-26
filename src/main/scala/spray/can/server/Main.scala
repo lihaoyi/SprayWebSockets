@@ -8,6 +8,7 @@ import spray.io._
 import websockets.model.OpCode.Text
 import websockets.model.{OpCode, Frame}
 import websockets.SocketServer
+import java.nio.ByteBuffer
 
 
 object Main  {
@@ -26,6 +27,10 @@ class EchoActor extends Actor{
     case f @ Frame(fin, rsv, Text, maskingKey, data) =>
       println("Received " + f)
       count = count + 1
-      sender ! Frame(fin, rsv, Text, None, (f.stringData.toUpperCase + count).getBytes)
+      val s = sender
+      s ! Frame(fin, rsv, Text, None, ByteBuffer.wrap((f.stringData.toUpperCase + count).getBytes))
+      context.system.scheduler.scheduleOnce(1 second){
+        s ! Frame(fin, rsv, Text, None, ByteBuffer.wrap((f.stringData.toUpperCase + count).getBytes))
+      }
   }
 }

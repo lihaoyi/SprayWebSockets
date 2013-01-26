@@ -6,6 +6,7 @@ import spray.io._
 import java.nio.ByteBuffer
 import spray.io.IOConnection.Tell
 import akka.actor.ActorRef
+import spray.io.TickGenerator.Tick
 
 case class FrameEvent(f: Frame) extends Event
 case class FrameCommand(frame: Frame) extends Command
@@ -25,6 +26,7 @@ case class WebsocketFrontEnd(receiver: ActorRef) extends PipelineStage{
       }
     }
 }
+
 case class Consolidation() extends PipelineStage{
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
@@ -32,6 +34,7 @@ case class Consolidation() extends PipelineStage{
       val commandPipeline = commandPL
 
       val eventPipeline: EPL = {
+
         case FrameEvent(f @ Frame(_, _, ConnectionClose, _, _)) =>
           val newF = f.copy(maskingKey = None)
           commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(newF))))
@@ -45,7 +48,7 @@ case class Consolidation() extends PipelineStage{
 
         case FrameEvent(f @ Frame(true, _, opcode, _, _))
           if opcode == Text || opcode == Binary =>
-          val newF = f.copy(maskingKey = None, data = f.stringData.toUpperCase.getBytes("UTF-8"))
+          val newF = f.copy(maskingKey = None, data = ByteBuffer.wrap(f.stringData.toUpperCase.getBytes("UTF-8")))
 
           eventPL(FrameEvent(newF))
 
@@ -62,11 +65,13 @@ case class FrameParsing() extends PipelineStage {
           commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(f.frame))))
         case x => commandPL(x)
       }
+
       val eventPipeline: EPL = {
         case IOBridge.Received(connection, buffer) =>
           val frame = model.Frame.read(buffer)
           eventPL(FrameEvent(frame))
-        case _ => ()
+        case Tick => ()
+        case x => eventPL(x)
       }
     }
 }

@@ -24,7 +24,8 @@ object Build extends sbt.Build{
         "io.spray"                %  "spray-httpx"    % "1.1-20130108",
         "io.spray"                %  "spray-client"    % "1.1-20130108",
         "org.scalatest" % "scalatest_2.10.0" % "2.0.M5" % "test",
-        "org.seleniumhq.selenium" % "selenium-java" % "2.28.0" % "test"
+        "org.seleniumhq.selenium" % "selenium-java" % "2.28.0" % "test",
+        "org.scalacheck" %% "scalacheck" % "1.10.0" % "test"
       )
     )
   )
