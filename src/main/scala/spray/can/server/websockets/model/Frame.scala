@@ -2,6 +2,7 @@ package spray.can.server.websockets.model
 
 import java.nio.ByteBuffer
 import java.io.{DataOutputStream, ByteArrayOutputStream}
+import akka.util.ByteString
 
 object Frame{
   def read(in: ByteBuffer) = {
@@ -36,7 +37,7 @@ object Frame{
       data(i) = (data(i) ^ (m >> (8 * j)) & 0xff).toByte
     }
 
-    Frame(FIN, RSV, opcode, maskingKey, ByteBuffer.wrap(data))
+    Frame(FIN, RSV, opcode, maskingKey, ByteString(data))
   }
   def write(f: Frame): Array[Byte] = {
     import f._
@@ -51,7 +52,7 @@ object Frame{
       opcode.value
     )
     val b1 = (maskingKey.isDefined.b << 7) | (
-      data.capacity() match {
+      data.length match {
         case x if x <= 125 => x
         case x if x < (2 << 16) => 126
         case x => 127
@@ -61,21 +62,20 @@ object Frame{
     out.writeByte(
       b1
     )
-    data.capacity() match {
+    data.length match {
       case x if x <= 125 => ()
-      case x if x < (2 << 16) => out.writeShort(data.capacity())
-      case x => out.writeLong(data.capacity())
+      case x if x < (2 << 16) => out.writeShort(data.length)
+      case x => out.writeLong(data.length)
     }
 
     for (m <- maskingKey){
       out.writeInt(m)
     }
 
-    val array = new Array[Byte](data.capacity())
-    data.get(array)
+    val array = data.toArray
     for{
       m <- maskingKey
-      i <- 0 until data.capacity()
+      i <- 0 until data.length
     }{
       val j = 3 - i % 4
       array(i) = (array(i) ^ (m >> (8 * j)) & 0xff).toByte
@@ -84,17 +84,15 @@ object Frame{
     byteOutStream.toByteArray
   }
 
-  def ping(data: Array[Byte]) = Frame(true, (false, false, false), OpCode.Ping, None, ByteBuffer.wrap(data))
-  def pong(data: Array[Byte]) = Frame(true, (false, false, false), OpCode.Pong, None, ByteBuffer.wrap(data))
 }
 
 case class Frame(FIN: Boolean,
                  RSV: (Boolean, Boolean, Boolean),
                  opcode: OpCode,
                  maskingKey: Option[Int],
-                 data: ByteBuffer){
+                 data: ByteString){
 
-  def stringData = new String(data.array(), "UTF-8")
+  def stringData = new String(data.toArray, "UTF-8")
   implicit class x(bool: Boolean){ def b = if (bool) 1 else 0 }
 
 }
