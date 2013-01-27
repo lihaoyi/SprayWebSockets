@@ -43,27 +43,32 @@ case class Consolidation() extends PipelineStage{
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
       var frags: List[Frame] = Nil
-      val commandPipeline = commandPL
+      val commandPipeline: CPL = {
+        case x =>
+          println(x)
+          commandPL(x)
+      }
 
       val eventPipeline: EPL = {
 
         case FrameEvent(f @ Frame(_, _, ConnectionClose, _, _)) =>
+          println("W")
           val newF = f.copy(maskingKey = None)
           commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(newF))))
 
-        case FrameEvent(f @ Frame(false, _, opcode, _, _))
-          if opcode == Text || opcode == Binary => // start frag
+        case FrameEvent(f @ Frame(false, _, opcode, _, _)) =>
+          println("X")
           frags = f :: frags
 
-        case FrameEvent(f @ Frame(false, _, Continuation, _, _)) => // continue frag
+        case FrameEvent(f @ Frame(true, _, opcode, _, _)) =>
+          println("Z")
           frags = f :: frags
-
-        case FrameEvent(f @ Frame(true, _, opcode, _, _))
-          if opcode == Text || opcode == Binary =>
-          frags = f :: frags
-
-          eventPL(FrameEvent(f.copy(data = frags.map(_.data).reduce(_++_).compact)))
+          val newData = frags.map(_.data).reverse.reduce(_++_).compact
+          println(newData.decodeString("UTF-8"))
+          eventPL(FrameEvent(frags.last.copy(data = newData)))
           frags = Nil
+          println("Z1")
+
         case msg => eventPL(msg)
       }
     }
