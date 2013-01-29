@@ -10,7 +10,11 @@ object Frame{
   case object Incomplete extends ParsedFrame
   case object TooLarge extends ParsedFrame
   def read(in: ByteBuffer, maxMessageLength: Long = Long.MaxValue): ParsedFrame = {
-    if (in.remaining() < 2) return Incomplete
+    in.mark()
+    if (in.remaining() < 2) {
+      in.reset()
+      return Incomplete
+    }
     val b0 = in.get
     val FIN = ((b0 >> 7) & 1) != 0
 
@@ -25,18 +29,26 @@ object Frame{
     val mask = (b1 >> 7) & 1
     val payloadLength = (b1 & 127) match{
       case 126 =>
-        if (in.remaining() < 2) return Incomplete
+        if (in.remaining() < 2) {
+          in.reset()
+          return Incomplete
+        }
         in.getShort
       case 127 =>
-        if (in.remaining() < 4) return Incomplete
+        if (in.remaining() < 4) {
+          in.reset()
+          return Incomplete
+        }
         in.getLong
       case x => x
     }
     val maskingKey = if (mask != 0) Some(in.getInt) else None
 
     if (payloadLength > maxMessageLength) {
+      in.reset()
       TooLarge
     } else if (in.remaining() < payloadLength) {
+      in.reset()
       Incomplete
     } else Successful{
       val data = new Array[Byte](payloadLength.toInt)

@@ -13,11 +13,13 @@ import spray.io.IOBridge.Connection
 import spray.io.Connection
 import akka.actor.{Props, ActorRef}
 import java.net.InetSocketAddress
+import concurrent.duration._
 
 class SocketServer(httpHandler: MessageHandler,
                    frameHandler: MessageHandler,
                    settings: ServerSettings = ServerSettings(),
-                   frameSizeLimit: Long = 1024 * 1024)
+                   frameSizeLimit: Long = 1024 * 1024,
+                   autoPingInterval: Duration = 1 second)
                   (implicit sslEngineProvider: ServerSSLEngineProvider)
                    extends HttpServer(httpHandler, settings) {
 
@@ -57,9 +59,10 @@ object SocketServer{
   def apply(acceptHandler: MessageHandler,
             frameHandler: MessageHandler,
             settings: ServerSettings = ServerSettings(),
-            frameSizeLimit: Long = 1024 * 1024)
+            frameSizeLimit: Long = 1024 * 1024,
+            autoPingInterval: Duration = 1 second)
            (implicit sslEngineProvider: ServerSSLEngineProvider): SocketServer = {
-    new SocketServer(acceptHandler,  frameHandler, settings, frameSizeLimit)
+    new SocketServer(acceptHandler,  frameHandler, settings, frameSizeLimit, autoPingInterval)
   }
 
   def calculateReturnHash(headers: List[HttpHeader]) = {

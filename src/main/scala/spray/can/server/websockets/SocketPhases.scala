@@ -10,10 +10,18 @@ import spray.io.IOConnection.Tell
 import akka.util.ByteString
 import akka.actor.IO.Closed
 
-case class FrameEvent(f: Frame) extends Event
-case class FrameCommand(frame: Frame) extends Command
-case class Upgrade(data: Any) extends Command
 
+object Closing{
+  def close(commandPL : Pipeline[Command], closeCode: Short, message: String) = {
+    val closeCodeData = ByteString(
+      ByteBuffer.allocate(2)
+        .putShort(closeCode)
+        .rewind().asInstanceOf[ByteBuffer]
+    )
+    commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(Frame(opcode = ConnectionClose, data = closeCodeData)))))
+    commandPL(IOConnection.Close(spray.util.ConnectionCloseReasons.ProtocolError(message)))
+  }
+}
 /**
  * This pipeline stage simply forwards the events to and receives commands from
  * the given MessageHandler. It is the final stage of the websocket pipeline,
@@ -45,17 +53,6 @@ case class WebsocketFrontEnd(messageHandler: MessageHandler) extends PipelineSta
  * - Responding to Closed()
  *
  */
-object Cow{
-  def close(commandPL : Pipeline[Command], closeCode: Short, message: String) = {
-    val closeCodeData = ByteString(
-      ByteBuffer.allocate(2)
-        .putShort(closeCode)
-        .rewind().asInstanceOf[ByteBuffer]
-    )
-    commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(Frame(opcode = ConnectionClose, data = closeCodeData)))))
-    commandPL(IOConnection.Close(spray.util.ConnectionCloseReasons.ProtocolError(message)))
-  }
-}
 case class Consolidation(maxMessageLength: Long) extends PipelineStage{
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
@@ -67,7 +64,7 @@ case class Consolidation(maxMessageLength: Long) extends PipelineStage{
 
       val eventPipeline: EPL = {
         case FrameEvent(f @ Frame(_, _, _, None, _)) =>
-          Cow.close(commandPL, CloseCode.ProtocolError.statusCode, "Client-Server frames must be masked")
+          Closing.close(commandPL, CloseCode.ProtocolError.statusCode, "Client-Server frames must be masked")
 
         case FrameEvent(f @ Frame(true, _, ConnectionClose, _, _)) =>
           val newF = f.copy(maskingKey = None)
@@ -83,7 +80,7 @@ case class Consolidation(maxMessageLength: Long) extends PipelineStage{
 
         case FrameEvent(f @ Frame(true, _, opcode, _, _)) =>
           if (stored.map(_.data.length).getOrElse(0) + f.data.length > maxMessageLength){
-            Cow.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
+            Closing.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
           }else{
             stored = Some(stored.fold(f)(x => x.copy(data = x.data ++ f.data)))
             eventPL(FrameEvent(stored.get.copy(data = stored.get.data.compact)))
@@ -124,7 +121,7 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
               case Incomplete =>
                 false
               case TooLarge =>
-                Cow.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
+                Closing.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
                 false
             }
           ){}
