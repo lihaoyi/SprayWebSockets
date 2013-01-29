@@ -1,27 +1,36 @@
 package spray.can.server.websockets
 
 import model._
+import model.Frame.Successful
 import model.OpCode.Text
 import org.scalatest.FreeSpec
 import akka.actor.{ActorRef, Props, Actor, ActorSystem}
 import concurrent.duration._
-import spray.io.{SingletonHandler, IOClientConnection, IOServer}
+import spray.io._
 import akka.pattern._
 import concurrent.Await
-import akka.util.Timeout
+import akka.util.{ByteString, Timeout}
 import java.nio.ByteBuffer
-import spray.io.IOBridge.Received
 import spray.http.HttpRequest
+import spray.io.SingletonHandler
+import scala.Some
+import spray.io.IOBridge.Received
+import akka.testkit.TestActorRef
+import org.scalatest.concurrent.Eventually
 
-class SocketServerTests extends FreeSpec{
+class SocketServerTests extends FreeSpec with Eventually{
   implicit val system = ActorSystem()
-  implicit val timeout = Timeout(5 seconds)
+  implicit val timeout = akka.util.Timeout(5 seconds)
   implicit class blockActorRef(a: ActorRef){
-    def send(b: Array[Byte]) = {
-      a ! IOClientConnection.Send(ByteBuffer.wrap(b))
+    def send(b: Frame) = {
+      a ! IOClientConnection.Send(ByteBuffer.wrap(Frame.write(b)))
+
     }
-    def await(b: Array[Byte]) = {
-      Await.result(a ? IOClientConnection.Send(ByteBuffer.wrap(b)), 1 seconds).asInstanceOf[Received]
+    def await(b: Frame): Frame = {
+      Frame.read(Await.result(a ? IOClientConnection.Send(ByteBuffer.wrap(Frame.write(b))), 1 seconds).asInstanceOf[Received].buffer)
+           .asInstanceOf[Successful]
+           .frame
+
     }
   }
   val websocketClientHandshake =
@@ -37,27 +46,29 @@ class SocketServerTests extends FreeSpec{
         case req: HttpRequest =>
           sender ! SocketServer.acceptAllFunction(req)
           sender ! Upgrade(1)
+        case x =>
       }
     }
     class EchoActor extends Actor{
       var count = 0
       def receive = {
         case f @ Frame(fin, rsv, Text, maskingKey, data) =>
-          println("LOL")
           count = count + 1
           sender ! FrameCommand(Frame(fin, rsv, Text, None, (f.stringData.toUpperCase + count).getBytes))
+        case x =>
       }
     }
-    def setupConnection(port: Int) = {
+    def setupConnection(port: Int, maxMessageLength: Long = Long.MaxValue) = {
       val httpHandler = SingletonHandler(system.actorOf(Props(new AcceptActor)))
       val frameHandler = SingletonHandler(system.actorOf(Props(new EchoActor)))
-      val server = system.actorOf(Props(SocketServer(httpHandler, frameHandler)))
-      server.ask(IOServer.Bind("localhost", port))
+      val server = system.actorOf(Props(SocketServer(httpHandler, frameHandler, frameSizeLimit = maxMessageLength)))
+      Await.result(server ? IOServer.Bind("localhost", port), 10 seconds)
 
-      val connection = system.actorOf(Props(new IOClientConnection{}))
+      val connection = TestActorRef(new IOClientConnection{})
+
       Await.result(connection ? IOClientConnection.Connect("localhost", port), 10 seconds)
 
-      connection await websocketClientHandshake.getBytes
+      Await.result(connection ? IOClientConnection.Send(ByteBuffer.wrap(websocketClientHandshake.getBytes)), 10 seconds)
 
       connection
     }
@@ -66,36 +77,117 @@ class SocketServerTests extends FreeSpec{
       val connection = setupConnection(1001)
 
       def frame = Frame(true, (false, false, false), OpCode.Text, Some(12345123), "i am cow".getBytes)
-      val r3 = connection await Frame.write(frame)
-      assert(Frame.read(r3.buffer).stringData === "I AM COW1")
+      val r3 = connection await frame
+      assert(r3.stringData === "I AM COW1")
 
-      val r4 = connection await Frame.write(frame)
-      assert(Frame.read(r4.buffer).stringData === "I AM COW2")
+      val r4 = connection await frame
+      assert(r4.stringData === "I AM COW2")
     }
-    "Fragmentation" in {
+    "Testing ability to receive fragmented message" in {
       val connection = setupConnection(10001)
 
       val result1 = {
-        connection send Frame.write(Frame(false, (false, false, false), OpCode.Text, Some(12345123), "i am cow ".getBytes))
-        Thread.sleep(100)
-        connection send Frame.write(Frame(false, (false, false, false), OpCode.Continuation, Some(2139), "hear me moo ".getBytes))
-        Thread.sleep(100)
-        connection send Frame.write(Frame(false, (false, false, false), OpCode.Continuation, Some(-23), "i weigh twice as much as you ".getBytes))
-        Thread.sleep(100)
-        connection await Frame.write(Frame(true, (false, false, false), OpCode.Continuation, Some(-124123212), "and i look good on the barbecue ".getBytes))
+        connection send Frame(FIN = false, opcode = OpCode.Text, maskingKey = Some(12345123), data = "i am cow ".getBytes)
+        connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(2139), data = "hear me moo ".getBytes)
+        connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(-23), data = "i weigh twice as much as you ".getBytes)
+        connection await Frame(opcode = OpCode.Continuation, maskingKey = Some(-124123212), data = "and i look good on the barbecue ".getBytes)
       }
-      assert(Frame.read(result1.buffer).stringData === "I AM COW HEAR ME MOO I WEIGH TWICE AS MUCH AS YOU AND I LOOK GOOD ON THE BARBECUE 1")
+      assert(result1.stringData === "I AM COW HEAR ME MOO I WEIGH TWICE AS MUCH AS YOU AND I LOOK GOOD ON THE BARBECUE 1")
 
       val result2 = {
-        connection send Frame.write(Frame(false, (false, false, false), OpCode.Text, Some(12345123), "yoghurt curds cream cheese and butter ".getBytes))
-        Thread.sleep(100)
-        connection send Frame.write(Frame(false, (false, false, false), OpCode.Continuation, Some(2139), "comes from liquids from my udder ".getBytes))
-        Thread.sleep(100)
-        connection await Frame.write(Frame(true, (false, false, false), OpCode.Text, Some(-23), "i am cow, i am cow, hear me moooo ".getBytes))
+        connection send Frame(FIN = false, opcode = OpCode.Text, maskingKey = Some(12345123), data = "yoghurt curds cream cheese and butter ".getBytes)
+        connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(2139), data = "comes from liquids from my udder ".getBytes)
+        connection await Frame(opcode = OpCode.Text, maskingKey = Some(-23), data = "i am cow, i am cow, hear me moooo ".getBytes)
       }
-      assert(Frame.read(result2.buffer).stringData === "YOGHURT CURDS CREAM CHEESE AND BUTTER COMES FROM LIQUIDS FROM MY UDDER I AM COW, I AM COW, HEAR ME MOOOO 2")
+      assert(result2.stringData === "YOGHURT CURDS CREAM CHEESE AND BUTTER COMES FROM LIQUIDS FROM MY UDDER I AM COW, I AM COW, HEAR ME MOOOO 2")
 
     }
+    "Ping/Pong" - {
+      "simple responses" in {
+        val connection = setupConnection(10002)
 
+        val res1 = connection await Frame(opcode = OpCode.Ping, maskingKey = Some(123456), data = "i am cow".getBytes)
+        assert(res1.stringData === "i am cow")
+        val res2 = connection await Frame(opcode = OpCode.Ping, maskingKey = Some(123456), data = "i am cow".getBytes)
+        assert(res2.stringData === "i am cow")
+      }
+      "responding in middle of fragmented message" in {
+        val connection = setupConnection(10003)
+
+        val result1 = {
+          connection send Frame(FIN = false, opcode = OpCode.Text, maskingKey = Some(12345123), data = "i am cow ".getBytes)
+          connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(2139), data = "hear me moo ".getBytes)
+
+          val res1 = connection await Frame(opcode = OpCode.Ping, maskingKey = Some(123456), data = "i am cow".getBytes)
+          assert(res1.stringData === "i am cow")
+
+          connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(-23), data = "i weigh twice as much as you ".getBytes)
+
+          val res2 = connection await Frame(opcode = OpCode.Ping, maskingKey = Some(123456), data = "i am cow".getBytes)
+          assert(res2.stringData === "i am cow")
+
+          connection await Frame(opcode = OpCode.Continuation, maskingKey = Some(-124123212), data = "and i look good on the barbecue ".getBytes)
+        }
+        assert(result1.stringData === "I AM COW HEAR ME MOO I WEIGH TWICE AS MUCH AS YOU AND I LOOK GOOD ON THE BARBECUE 1")
+      }
+    }
+
+    "Closing Tests" - {
+      "Clean Close" in {
+        val connection = setupConnection(10004)
+        val res1 = connection await Frame(opcode = OpCode.ConnectionClose, maskingKey = Some(0))
+        assert(res1.opcode === OpCode.ConnectionClose)
+        eventually{
+          assert(connection.underlyingActor.isConnected === false)
+        }
+      }
+      "The server MUST close the connection upon receiving a frame that is not masked" in {
+        val connection = setupConnection(10005)
+        val res1 = connection await Frame(opcode = OpCode.Text, data = ByteString("lol"))
+        assert(res1.opcode === OpCode.ConnectionClose)
+        assert(res1.data.asByteBuffer.getShort === CloseCode.ProtocolError.statusCode)
+        eventually{
+          assert(connection.underlyingActor.isConnected === false)
+        }
+      }
+      "The server must close the connection if the frame is too large" - {
+        "single large frame" in {
+          val connection = setupConnection(10006, maxMessageLength = 1024)
+
+          // just below the limit works
+          val res1 = connection await Frame(opcode = OpCode.Text, data = ByteString("l" * 1024), maskingKey = Some(0))
+          assert(res1.opcode === OpCode.Text)
+          assert(res1.stringData === ("L" * 1024 + "1"))
+
+          // just above the limit
+          val res2 = connection await Frame(opcode = OpCode.Text, data = ByteString("l" * 1025), maskingKey = Some(0))
+          assert(res2.data.asByteBuffer.getShort === CloseCode.MessageTooBig.statusCode)
+          eventually{
+            assert(connection.underlyingActor.isConnected === false)
+          }
+        }
+        "fragmented large frame" in {
+          val connection = setupConnection(10007, maxMessageLength = 1024)
+
+          // just below the limit works
+          connection send Frame(FIN = false, opcode = OpCode.Text, data = ByteString("l" * 256), maskingKey = Some(0))
+          connection send Frame(FIN = false, opcode = OpCode.Continuation, data = ByteString("l" * 256), maskingKey = Some(0))
+          connection send Frame(FIN = false, opcode = OpCode.Continuation, data = ByteString("l" * 256), maskingKey = Some(0))
+          val res1 = connection await Frame(opcode = OpCode.Continuation, data = ByteString("l" * 256), maskingKey = Some(0))
+          assert(res1.opcode === OpCode.Text)
+          assert(res1.stringData === ("L" * 1024 + "1"))
+
+          // just above the limit
+          connection send Frame(FIN = false, opcode = OpCode.Text, data = ByteString("l" * 257), maskingKey = Some(0))
+          connection send Frame(FIN = false, opcode = OpCode.Continuation, data = ByteString("l" * 256), maskingKey = Some(0))
+          connection send Frame(FIN = false, opcode = OpCode.Continuation, data = ByteString("l" * 256), maskingKey = Some(0))
+          val res2 = connection await Frame(opcode = OpCode.Continuation, data = ByteString("l" * 256), maskingKey = Some(0))
+          assert(res2.data.asByteBuffer.getShort === CloseCode.MessageTooBig.statusCode)
+          eventually{
+            assert(connection.underlyingActor.isConnected === false)
+          }
+        }
+      }
+    }
   }
 }

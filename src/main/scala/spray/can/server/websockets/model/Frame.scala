@@ -5,8 +5,12 @@ import java.io.{DataOutputStream, ByteArrayOutputStream}
 import akka.util.ByteString
 
 object Frame{
-  def read(in: ByteBuffer) = {
-
+  sealed trait ParsedFrame
+  case class Successful(frame: Frame) extends ParsedFrame
+  case object Incomplete extends ParsedFrame
+  case object TooLarge extends ParsedFrame
+  def read(in: ByteBuffer, maxMessageLength: Long = Long.MaxValue): ParsedFrame = {
+    if (in.remaining() < 2) return Incomplete
     val b0 = in.get
     val FIN = ((b0 >> 7) & 1) != 0
 
@@ -20,24 +24,34 @@ object Frame{
     val b1 = in.get
     val mask = (b1 >> 7) & 1
     val payloadLength = (b1 & 127) match{
-      case 126 => in.getShort
-      case 127 => in.getLong
+      case 126 =>
+        if (in.remaining() < 2) return Incomplete
+        in.getShort
+      case 127 =>
+        if (in.remaining() < 4) return Incomplete
+        in.getLong
       case x => x
     }
     val maskingKey = if (mask != 0) Some(in.getInt) else None
 
-    val data = new Array[Byte](payloadLength.toInt)
-    in.get(data)
+    if (payloadLength > maxMessageLength) {
+      TooLarge
+    } else if (in.remaining() < payloadLength) {
+      Incomplete
+    } else Successful{
+      val data = new Array[Byte](payloadLength.toInt)
+      in.get(data)
 
-    for{
-      m <- maskingKey
-      i <- 0 until data.length
-    }{
-      val j = 3 - i % 4
-      data(i) = (data(i) ^ (m >> (8 * j)) & 0xff).toByte
+      for{
+        m <- maskingKey
+        i <- 0 until data.length
+      }{
+        val j = 3 - i % 4
+        data(i) = (data(i) ^ (m >> (8 * j)) & 0xff).toByte
+      }
+
+      Frame(FIN, RSV, opcode, maskingKey, ByteString(data))
     }
-
-    Frame(FIN, RSV, opcode, maskingKey, ByteString(data))
   }
   def write(f: Frame): Array[Byte] = {
     import f._
@@ -86,11 +100,11 @@ object Frame{
 
 }
 
-case class Frame(FIN: Boolean,
-                 RSV: (Boolean, Boolean, Boolean),
+case class Frame(FIN: Boolean = true,
+                 RSV: (Boolean, Boolean, Boolean) = (false, false, false),
                  opcode: OpCode,
-                 maskingKey: Option[Int],
-                 data: ByteString){
+                 maskingKey: Option[Int] = None,
+                 data: ByteString = ByteString.empty){
 
   def stringData = new String(data.toArray, "UTF-8")
   implicit class x(bool: Boolean){ def b = if (bool) 1 else 0 }

@@ -17,7 +17,7 @@ object OpCode{
   object Ping extends OpCode(9)
   object Pong extends OpCode(10)
 }
-class CloseCode(statusCode: Int)
+class CloseCode(val statusCode: Short)
 object CloseCode{
   object NormalClosure extends CloseCode(1000)
   object GoingAway extends CloseCode(1001)

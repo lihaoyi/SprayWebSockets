@@ -9,18 +9,34 @@ import java.security.MessageDigest
 import spray.can.server.ServerSettings
 import spray.http.HttpHeaders.RawHeader
 import spray.http.HttpResponse
+import spray.io.IOBridge.Connection
+import spray.io.Connection
+import akka.actor.{Props, ActorRef}
+import java.net.InetSocketAddress
 
 class SocketServer(httpHandler: MessageHandler,
                    frameHandler: MessageHandler,
-                   settings: ServerSettings = ServerSettings())
+                   settings: ServerSettings = ServerSettings(),
+                   frameSizeLimit: Long = 1024 * 1024)
                   (implicit sslEngineProvider: ServerSSLEngineProvider)
                    extends HttpServer(httpHandler, settings) {
+
+  override def createConnectionActor(connection: Connection) = {
+    context.actorOf(Props(new DefaultIOConnectionActor(connection, pipelineStage){
+      override def receive = {
+        case x =>
+
+        super.receive(x)
+      }
+    }), nextConnectionActorName)
+  }
+
   import settings.{StatsSupport => _, _}
   override val pipelineStage =
     Switching(
       ServerFrontend(settings, httpHandler, timeoutResponse) >>
       RequestChunkAggregation(RequestChunkAggregationLimit.toInt) ? (RequestChunkAggregationLimit > 0) >>
-      PipeliningLimiter(settings.PipeliningLimit) ? (PipeliningLimit > 0) >>
+      PipeliningLimiter(100) ? (PipeliningLimit > 0) >>
       StatsSupport(statsHolder.get) ? settings.StatsSupport >>
       RemoteAddressHeaderSupport() ? RemoteAddressHeader >>
       RequestParsing(ParserSettings, VerboseErrorMessages) >>
@@ -28,20 +44,22 @@ class SocketServer(httpHandler: MessageHandler,
       ConnectionTimeouts(IdleTimeout) ? (ReapingCycle > 0 && IdleTimeout > 0),
 
       WebsocketFrontEnd(frameHandler) >>
-      Consolidation() >>
-      FrameParsing()
+      Consolidation(frameSizeLimit) >>
+      FrameParsing(frameSizeLimit)
     ) >>
     SslTlsSupport(sslEngineProvider) ? SSLEncryption >>
     TickGenerator(ReapingCycle) ? (ReapingCycle > 0 && (IdleTimeout > 0 || RequestTimeout > 0))
+
 }
 
 object SocketServer{
 
   def apply(acceptHandler: MessageHandler,
             frameHandler: MessageHandler,
-            settings: ServerSettings = ServerSettings())
+            settings: ServerSettings = ServerSettings(),
+            frameSizeLimit: Long = 1024 * 1024)
            (implicit sslEngineProvider: ServerSSLEngineProvider): SocketServer = {
-    new SocketServer(acceptHandler,  frameHandler, settings)
+    new SocketServer(acceptHandler,  frameHandler, settings, frameSizeLimit)
   }
 
   def calculateReturnHash(headers: List[HttpHeader]) = {

@@ -1,11 +1,14 @@
 package spray.can.server
 package websockets
 import model._
+import model.Frame.{TooLarge, Incomplete, Successful}
 import OpCode._
 import spray.io._
 import java.nio.ByteBuffer
 import spray.io.TickGenerator.Tick
 import spray.io.IOConnection.Tell
+import akka.util.ByteString
+import akka.actor.IO.Closed
 
 case class FrameEvent(f: Frame) extends Event
 case class FrameCommand(frame: Frame) extends Command
@@ -21,11 +24,14 @@ case class WebsocketFrontEnd(messageHandler: MessageHandler) extends PipelineSta
     new Pipelines{
       def handlerCreator = messageHandler(context)
       val commandPipeline: CPL = {
-        case f @ FrameCommand(c) => commandPL(f)
+        case f @ FrameCommand(c) =>
+          commandPL(f)
       }
 
       val eventPipeline: EPL = {
-        case f @ FrameEvent(e) => commandPL(Tell(handlerCreator(), e, context.self))
+        case f @ FrameEvent(e) =>
+          commandPL(Tell(handlerCreator(), e, context.self))
+        case c: IOBridge.Closed => commandPL(Tell(handlerCreator(), c, context.self))
       }
     }
 }
@@ -39,37 +45,53 @@ case class WebsocketFrontEnd(messageHandler: MessageHandler) extends PipelineSta
  * - Responding to Closed()
  *
  */
-case class Consolidation() extends PipelineStage{
+object Cow{
+  def close(commandPL : Pipeline[Command], closeCode: Short, message: String) = {
+    val closeCodeData = ByteString(
+      ByteBuffer.allocate(2)
+        .putShort(closeCode)
+        .rewind().asInstanceOf[ByteBuffer]
+    )
+    commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(Frame(opcode = ConnectionClose, data = closeCodeData)))))
+    commandPL(IOConnection.Close(spray.util.ConnectionCloseReasons.ProtocolError(message)))
+  }
+}
+case class Consolidation(maxMessageLength: Long) extends PipelineStage{
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
-      var frags: List[Frame] = Nil
+      var stored: Option[Frame] = None
       val commandPipeline: CPL = {
         case x =>
-          println(x)
           commandPL(x)
       }
 
       val eventPipeline: EPL = {
+        case FrameEvent(f @ Frame(_, _, _, None, _)) =>
+          Cow.close(commandPL, CloseCode.ProtocolError.statusCode, "Client-Server frames must be masked")
 
-        case FrameEvent(f @ Frame(_, _, ConnectionClose, _, _)) =>
-          println("W")
+        case FrameEvent(f @ Frame(true, _, ConnectionClose, _, _)) =>
+          val newF = f.copy(maskingKey = None)
+          commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(newF))))
+          commandPL(IOConnection.Close(spray.util.ConnectionCloseReasons.CleanClose))
+
+        case FrameEvent(f @ Frame(true, _, Ping, _, _)) =>
           val newF = f.copy(maskingKey = None)
           commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(newF))))
 
         case FrameEvent(f @ Frame(false, _, opcode, _, _)) =>
-          println("X")
-          frags = f :: frags
+          stored = Some(stored.fold(f)(x => x.copy(data = x.data ++ f.data)))
 
         case FrameEvent(f @ Frame(true, _, opcode, _, _)) =>
-          println("Z")
-          frags = f :: frags
-          val newData = frags.map(_.data).reverse.reduce(_++_).compact
-          println(newData.decodeString("UTF-8"))
-          eventPL(FrameEvent(frags.last.copy(data = newData)))
-          frags = Nil
-          println("Z1")
+          if (stored.map(_.data.length).getOrElse(0) + f.data.length > maxMessageLength){
+            Cow.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
+          }else{
+            stored = Some(stored.fold(f)(x => x.copy(data = x.data ++ f.data)))
+            eventPL(FrameEvent(stored.get.copy(data = stored.get.data.compact)))
+            stored = None
+          }
 
-        case msg => eventPL(msg)
+        case msg =>
+          eventPL(msg)
       }
     }
 }
@@ -79,9 +101,10 @@ case class Consolidation() extends PipelineStage{
  * FrameCommands into IOConnection.Send commands. Otherwise does not do anything
  * fancy.
  */
-case class FrameParsing() extends PipelineStage {
+case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
+      var streamBuffer: ByteString = ByteString()
       val commandPipeline: CPL = {
         case f: FrameCommand =>
           commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(f.frame))))
@@ -89,9 +112,23 @@ case class FrameParsing() extends PipelineStage {
       }
 
       val eventPipeline: EPL = {
-        case IOBridge.Received(connection, buffer) =>
-          val frame = model.Frame.read(buffer)
-          eventPL(FrameEvent(frame))
+        case IOBridge.Received(connection, data) =>
+          streamBuffer = streamBuffer ++ ByteString(data)
+          val buffer = streamBuffer.asByteBuffer
+          while(
+
+            model.Frame.read(buffer, maxMessageLength) match{
+              case Successful(frame) =>
+                eventPL(FrameEvent(frame))
+                true
+              case Incomplete =>
+                false
+              case TooLarge =>
+                Cow.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
+                false
+            }
+          ){}
+          streamBuffer = ByteString(buffer)
 
         case Tick => () // ignore Ticks, do not propagate
         case x => eventPL(x)

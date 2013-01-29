@@ -15,4 +15,5 @@ class FrameTests extends FreeSpec{
     checkFrame(Frame(false, (true, true, false), OpCode.Ping, None, Array[Byte](1, 2, 4, 8, 16, 32, 64)))
     checkFrame(Frame(true, (false, true, true), OpCode.Pong, None, Array[Byte](1, 2, 4, 8, 16, 32, 64)))
   }
+
 }
