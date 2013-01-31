@@ -26,21 +26,8 @@ class SocketServerTests extends FreeSpec with Eventually{
   implicit def byteArrayToBuffer(array: Array[Byte]) = ByteString(array)
   implicit val system = ActorSystem()
   implicit val timeout = akka.util.Timeout(5 seconds)
-  implicit val sslContext = createSslContext("/ssl-test-keystore.jks", "")
 
-  def createSslContext(keyStoreResource: String, password: String): SSLContext = {
-    val keyStore = KeyStore.getInstance("jks")
-    val res = getClass.getResourceAsStream(keyStoreResource)
-    require(res != null)
-    keyStore.load(res, password.toCharArray)
-    val keyManagerFactory = KeyManagerFactory.getInstance("SunX509")
-    keyManagerFactory.init(keyStore, password.toCharArray)
-    val trustManagerFactory = TrustManagerFactory.getInstance("SunX509")
-    trustManagerFactory.init(keyStore)
-    val context = SSLContext.getInstance("SSL")
-    context.init(keyManagerFactory.getKeyManagers, trustManagerFactory.getTrustManagers, new SecureRandom)
-    context
-  }
+
 
   implicit class blockActorRef(a: ActorRef){
     def send(b: Frame) = {
@@ -75,15 +62,15 @@ class SocketServerTests extends FreeSpec with Eventually{
       case f @ Frame(fin, rsv, Text, maskingKey, data) =>
         println("Received: " + f.stringData)
         count = count + 1
-        sender ! FrameCommand(Frame(fin, rsv, Text, None, (f.stringData.toUpperCase + count).getBytes))
+        sender ! Frame(fin, rsv, Text, None, (f.stringData.toUpperCase + count).getBytes)
       case x =>
     }
   }
   def setupConnection(port: Int, maxMessageLength: Long = Long.MaxValue, settings: ServerSettings = ServerSettings())
                      (implicit sslEngineProvider: ServerSSLEngineProvider, clientEngineProvider: ClientSSLEngineProvider) = {
     val httpHandler = SingletonHandler(system.actorOf(Props(new AcceptActor)))
-    val frameHandler = SingletonHandler(system.actorOf(Props(new EchoActor)))
-    val server = system.actorOf(Props(SocketServer(httpHandler, frameHandler, settings, frameSizeLimit = maxMessageLength)))
+    val frameHandler = system.actorOf(Props(new EchoActor))
+    val server = system.actorOf(Props(SocketServer(httpHandler, x => frameHandler, settings, frameSizeLimit = maxMessageLength)))
     Await.result(server ? IOServer.Bind("localhost", port), 10 seconds)
 
     val connection = TestActorRef(new IOClientConnection{
@@ -182,6 +169,7 @@ class SocketServerTests extends FreeSpec with Eventually{
           assert(connection.underlyingActor.isConnected === false)
         }
       }
+
       "The server must close the connection if the frame is too large" - {
         "single large frame" in {
           val connection = setupConnection(10006, maxMessageLength = 1024)

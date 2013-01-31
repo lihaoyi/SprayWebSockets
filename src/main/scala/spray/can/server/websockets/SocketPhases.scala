@@ -8,7 +8,7 @@ import java.nio.ByteBuffer
 import spray.io.TickGenerator.Tick
 import spray.io.IOConnection.Tell
 import akka.util.ByteString
-
+import akka.actor.{Props, Actor, ActorRef}
 
 object Closing{
   def close(commandPL : Pipeline[Command], closeCode: Short, message: String) = {
@@ -26,10 +26,14 @@ object Closing{
  * the given MessageHandler. It is the final stage of the websocket pipeline,
  * and is how the pipeline interacts with user code.
  */
-case class WebsocketFrontEnd(messageHandler: MessageHandler) extends PipelineStage{
-  def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
+case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
+  def apply(pcontext: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines{
-      def handlerCreator = messageHandler(context)
+      val receiveAdapter = pcontext.connectionActorContext.actorOf(Props(new Actor{
+        def receive = {
+          case f: Frame => pcontext.self ! FrameCommand(f)
+        }
+      }))
       val commandPipeline: CPL = {
         case f @ FrameCommand(c) =>
           commandPL(f)
@@ -37,11 +41,12 @@ case class WebsocketFrontEnd(messageHandler: MessageHandler) extends PipelineSta
 
       val eventPipeline: EPL = {
         case f @ FrameEvent(e) =>
-          commandPL(Tell(handlerCreator(), e, context.self))
-        case c: IOBridge.Closed => commandPL(Tell(handlerCreator(), c, context.self))
+          commandPL(Tell(handler, e, receiveAdapter))
+        case c: IOBridge.Closed => commandPL(Tell(handler, c, receiveAdapter))
       }
     }
 }
+
 
 /**
  * Does the fancy websocket stuff, handling:
@@ -112,7 +117,6 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
           streamBuffer = streamBuffer ++ ByteString(data)
           val buffer = streamBuffer.asByteBuffer
           while(
-
             model.Frame.read(buffer, maxMessageLength) match{
               case Successful(frame) =>
                 eventPL(FrameEvent(frame))
@@ -132,18 +136,19 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
     }
 }
 
-case class Switching(stage1: PipelineStage, stage2: PipelineStage) extends PipelineStage {
+case class Switching(stage1: PipelineStage, stage2: Any => PipelineStage) extends PipelineStage {
 
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
       val pl1 = stage1(context, commandPL, eventPL)
-      val pl2 = stage2(context, commandPL, eventPL)
+
       var eventPLVar = pl1.eventPipeline
       var commandPLVar = pl1.commandPipeline
 
       // it is important to introduce the proxy to the var here
       def commandPipeline: CPL = {
         case Response(_, u @ Upgrade(msg)) =>
+          val pl2 = stage2(msg)(context, commandPL, eventPL)
           eventPLVar = pl2.eventPipeline
           commandPLVar = pl2.commandPipeline
         case c =>

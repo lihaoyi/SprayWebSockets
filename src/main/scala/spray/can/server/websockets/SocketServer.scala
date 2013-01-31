@@ -14,7 +14,7 @@ import akka.actor.{Props, ActorRef}
 import concurrent.duration._
 
 class SocketServer(httpHandler: MessageHandler,
-                   frameHandler: MessageHandler,
+                   frameHandler: Any => ActorRef,
                    settings: ServerSettings = ServerSettings(),
                    frameSizeLimit: Long = 1024 * 1024,
                    autoPingInterval: Duration = 1 second)
@@ -42,10 +42,10 @@ class SocketServer(httpHandler: MessageHandler,
       RequestParsing(ParserSettings, VerboseErrorMessages) >>
       ResponseRendering(settings) >>
       ConnectionTimeouts(IdleTimeout) ? (ReapingCycle > 0 && IdleTimeout > 0),
-
-      WebsocketFrontEnd(frameHandler) >>
-      Consolidation(frameSizeLimit) >>
-      FrameParsing(frameSizeLimit)
+      (upgradeMsg: Any) =>
+        WebsocketFrontEnd(frameHandler(upgradeMsg)) >>
+        Consolidation(frameSizeLimit) >>
+        FrameParsing(frameSizeLimit)
     ) >>
     SslTlsSupport(sslEngineProvider) ? SSLEncryption >>
     TickGenerator(ReapingCycle) ? (ReapingCycle > 0 && (IdleTimeout > 0 || RequestTimeout > 0))
@@ -55,7 +55,7 @@ class SocketServer(httpHandler: MessageHandler,
 object SocketServer{
 
   def apply(acceptHandler: MessageHandler,
-            frameHandler: MessageHandler,
+            frameHandler: Any => ActorRef,
             settings: ServerSettings = ServerSettings(),
             frameSizeLimit: Long = 1024 * 1024,
             autoPingInterval: Duration = 1 second)
