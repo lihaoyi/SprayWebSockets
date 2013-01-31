@@ -13,6 +13,7 @@ object Frame{
     in.mark()
     if (in.remaining() < 2) {
       in.reset()
+      println("A")
       return Incomplete
     }
     val b0 = in.get
@@ -31,12 +32,14 @@ object Frame{
       case 126 =>
         if (in.remaining() < 2) {
           in.reset()
+          println("B")
           return Incomplete
         }
         in.getShort
       case 127 =>
         if (in.remaining() < 4) {
           in.reset()
+          println("C")
           return Incomplete
         }
         in.getLong
@@ -49,6 +52,7 @@ object Frame{
       TooLarge
     } else if (in.remaining() < payloadLength) {
       in.reset()
+      println("D")
       Incomplete
     } else Successful{
       val data = new Array[Byte](payloadLength.toInt)
@@ -85,9 +89,8 @@ object Frame{
       }
     )
 
-    out.writeByte(
-      b1
-    )
+    out.writeByte(b1)
+
     data.length match {
       case x if x <= 125 => ()
       case x if x < (2 << 16) => out.writeShort(data.length)

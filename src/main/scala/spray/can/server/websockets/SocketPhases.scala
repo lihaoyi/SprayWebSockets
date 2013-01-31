@@ -8,15 +8,14 @@ import java.nio.ByteBuffer
 import spray.io.TickGenerator.Tick
 import spray.io.IOConnection.Tell
 import akka.util.ByteString
-import akka.actor.IO.Closed
 
 
 object Closing{
   def close(commandPL : Pipeline[Command], closeCode: Short, message: String) = {
     val closeCodeData = ByteString(
       ByteBuffer.allocate(2)
-        .putShort(closeCode)
-        .rewind().asInstanceOf[ByteBuffer]
+                .putShort(closeCode)
+                .rewind().asInstanceOf[ByteBuffer]
     )
     commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(Frame(opcode = ConnectionClose, data = closeCodeData)))))
     commandPL(IOConnection.Close(spray.util.ConnectionCloseReasons.ProtocolError(message)))
@@ -75,10 +74,10 @@ case class Consolidation(maxMessageLength: Long) extends PipelineStage{
           val newF = f.copy(maskingKey = None)
           commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(newF))))
 
-        case FrameEvent(f @ Frame(false, _, opcode, _, _)) =>
+        case FrameEvent(f @ Frame(false, _, _, _, _)) =>
           stored = Some(stored.fold(f)(x => x.copy(data = x.data ++ f.data)))
 
-        case FrameEvent(f @ Frame(true, _, opcode, _, _)) =>
+        case FrameEvent(f @ Frame(true, _, _, _, _)) =>
           if (stored.map(_.data.length).getOrElse(0) + f.data.length > maxMessageLength){
             Closing.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
           }else{

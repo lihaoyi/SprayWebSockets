@@ -3,9 +3,10 @@ package spray.can.server.websockets
 import model._
 import org.scalatest.FreeSpec
 import java.nio.ByteBuffer
+import akka.util.ByteString
 
 class FrameTests extends FreeSpec{
-
+  implicit def byteArrayToBuffer(array: Array[Byte]) = ByteString(array)
 
   "serializing and deserializing should give you back the same thing" in {
     def checkFrame(f: Frame) = f === Frame.read(ByteBuffer.wrap(Frame.write(f)))

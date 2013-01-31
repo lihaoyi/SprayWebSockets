@@ -17,10 +17,31 @@ import scala.Some
 import spray.io.IOBridge.Received
 import akka.testkit.TestActorRef
 import org.scalatest.concurrent.Eventually
+import spray.can.server.ServerSettings
+import spray.io.IOClientConnection.DefaultPipelineStage
+import javax.net.ssl.{TrustManagerFactory, KeyManagerFactory, SSLContext}
+import java.security.{SecureRandom, KeyStore}
 
 class SocketServerTests extends FreeSpec with Eventually{
+  implicit def byteArrayToBuffer(array: Array[Byte]) = ByteString(array)
   implicit val system = ActorSystem()
   implicit val timeout = akka.util.Timeout(5 seconds)
+  implicit val sslContext = createSslContext("/ssl-test-keystore.jks", "")
+
+  def createSslContext(keyStoreResource: String, password: String): SSLContext = {
+    val keyStore = KeyStore.getInstance("jks")
+    val res = getClass.getResourceAsStream(keyStoreResource)
+    require(res != null)
+    keyStore.load(res, password.toCharArray)
+    val keyManagerFactory = KeyManagerFactory.getInstance("SunX509")
+    keyManagerFactory.init(keyStore, password.toCharArray)
+    val trustManagerFactory = TrustManagerFactory.getInstance("SunX509")
+    trustManagerFactory.init(keyStore)
+    val context = SSLContext.getInstance("SSL")
+    context.init(keyManagerFactory.getKeyManagers, trustManagerFactory.getTrustManagers, new SecureRandom)
+    context
+  }
+
   implicit class blockActorRef(a: ActorRef){
     def send(b: Frame) = {
       a ! IOClientConnection.Send(ByteBuffer.wrap(Frame.write(b)))
@@ -40,38 +61,49 @@ class SocketServerTests extends FreeSpec with Eventually{
     "Connection: Upgrade\r\n" +
     "Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==\r\n\r\n"
 
+  class AcceptActor extends Actor{
+    def receive = {
+      case req: HttpRequest =>
+        sender ! SocketServer.acceptAllFunction(req)
+        sender ! Upgrade(1)
+      case x =>
+    }
+  }
+  class EchoActor extends Actor{
+    var count = 0
+    def receive = {
+      case f @ Frame(fin, rsv, Text, maskingKey, data) =>
+        println("Received: " + f.stringData)
+        count = count + 1
+        sender ! FrameCommand(Frame(fin, rsv, Text, None, (f.stringData.toUpperCase + count).getBytes))
+      case x =>
+    }
+  }
+  def setupConnection(port: Int, maxMessageLength: Long = Long.MaxValue, settings: ServerSettings = ServerSettings())
+                     (implicit sslEngineProvider: ServerSSLEngineProvider, clientEngineProvider: ClientSSLEngineProvider) = {
+    val httpHandler = SingletonHandler(system.actorOf(Props(new AcceptActor)))
+    val frameHandler = SingletonHandler(system.actorOf(Props(new EchoActor)))
+    val server = system.actorOf(Props(SocketServer(httpHandler, frameHandler, settings, frameSizeLimit = maxMessageLength)))
+    Await.result(server ? IOServer.Bind("localhost", port), 10 seconds)
+
+    val connection = TestActorRef(new IOClientConnection{
+      override def pipelineStage =
+        DefaultPipelineStage >>
+        SslTlsSupport(clientEngineProvider) ? settings.SSLEncryption
+      override def connected = { case x =>
+        println("IOClientConnection received " + x)
+        super.connected(x)
+      }
+    })
+
+    Await.result(connection ? IOClientConnection.Connect("localhost", port), 10 seconds)
+
+    Await.result(connection ? IOClientConnection.Send(ByteBuffer.wrap(websocketClientHandshake.getBytes)), 10 seconds)
+    Thread.sleep(1)
+    connection
+  }
   "Echo Server Tests" - {
-    class AcceptActor extends Actor{
-      def receive = {
-        case req: HttpRequest =>
-          sender ! SocketServer.acceptAllFunction(req)
-          sender ! Upgrade(1)
-        case x =>
-      }
-    }
-    class EchoActor extends Actor{
-      var count = 0
-      def receive = {
-        case f @ Frame(fin, rsv, Text, maskingKey, data) =>
-          count = count + 1
-          sender ! FrameCommand(Frame(fin, rsv, Text, None, (f.stringData.toUpperCase + count).getBytes))
-        case x =>
-      }
-    }
-    def setupConnection(port: Int, maxMessageLength: Long = Long.MaxValue) = {
-      val httpHandler = SingletonHandler(system.actorOf(Props(new AcceptActor)))
-      val frameHandler = SingletonHandler(system.actorOf(Props(new EchoActor)))
-      val server = system.actorOf(Props(SocketServer(httpHandler, frameHandler, frameSizeLimit = maxMessageLength)))
-      Await.result(server ? IOServer.Bind("localhost", port), 10 seconds)
 
-      val connection = TestActorRef(new IOClientConnection{})
-
-      Await.result(connection ? IOClientConnection.Connect("localhost", port), 10 seconds)
-
-      Await.result(connection ? IOClientConnection.Send(ByteBuffer.wrap(websocketClientHandshake.getBytes)), 10 seconds)
-
-      connection
-    }
 
     "hello world with echo server" in {
       val connection = setupConnection(1001)
@@ -190,4 +222,5 @@ class SocketServerTests extends FreeSpec with Eventually{
       }
     }
   }
+
 }

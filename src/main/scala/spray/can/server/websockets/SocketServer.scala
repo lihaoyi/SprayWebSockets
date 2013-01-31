@@ -9,10 +9,8 @@ import java.security.MessageDigest
 import spray.can.server.ServerSettings
 import spray.http.HttpHeaders.RawHeader
 import spray.http.HttpResponse
-import spray.io.IOBridge.Connection
 import spray.io.Connection
 import akka.actor.{Props, ActorRef}
-import java.net.InetSocketAddress
 import concurrent.duration._
 
 class SocketServer(httpHandler: MessageHandler,
