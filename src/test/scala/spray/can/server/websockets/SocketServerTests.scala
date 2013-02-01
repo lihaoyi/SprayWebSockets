@@ -53,21 +53,16 @@ class SocketServerTests extends FreeSpec with Eventually{
       @volatile var buffer = ByteString.empty
       val x = TestActorRef(new Actor {
         def receive = {
-          case Received(_, data) =>
-            println("BufferActor " + ByteString(data.duplicate()))
-            buffer = buffer ++ ByteString(data)
-          case x =>
-            println("UNKNOWN  " + x)
+          case Received(_, data) => buffer = buffer ++ ByteString(data)
         }
       })
       a.tell(IOClientConnection.Send(ByteBuffer.wrap(Frame.write(b))), x)
-      val result = eventually {
+      eventually {
         Frame.read(buffer.asByteBuffer)
              .asInstanceOf[Successful]
              .frame
       }
-      println(result)
-      result
+
     }
   }
 
@@ -90,7 +85,6 @@ class SocketServerTests extends FreeSpec with Eventually{
     var count = 0
     def receive = {
       case f @ Frame(fin, rsv, Text, maskingKey, data) =>
-        println("Received: " + f.stringData)
         count = count + 1
         sender ! Frame(fin, rsv, Text, None, (f.stringData.toUpperCase + count).getBytes)
       case x =>
@@ -107,18 +101,6 @@ class SocketServerTests extends FreeSpec with Eventually{
       override def pipelineStage =
         DefaultPipelineStage >>
         SslTlsSupport(ClientSSLEngineProvider.default) ? settings.SSLEncryption
-      override def connected = {
-        case x @ Received(_, buffer) =>
-          println("IOConnection Received " + ByteString(buffer.duplicate))
-          super.connected(x)
-        case x => super.connected(x)
-      }
-      override def baseCommandPipeline = {
-        case x@Tell(receiver, msg, sender) =>
-          println("Telling " + x)
-          super.baseCommandPipeline(x)
-        case x => super.baseCommandPipeline(x)
-      }
     })
 
     Await.result(connection ? IOClientConnection.Connect("localhost", port), 10 seconds)

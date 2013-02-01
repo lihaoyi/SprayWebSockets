@@ -24,20 +24,7 @@ class SocketServer(httpHandler: MessageHandler,
                    extends HttpServer(httpHandler, settings) {
 
   override def createConnectionActor(connection: Connection) = {
-    context.actorOf(Props(new DefaultIOConnectionActor(connection, pipelineStage){
-
-      override def baseCommandPipeline: Pipeline[Command] = { x =>
-        x match{
-          case Send(buffers, _) =>
-            buffers.foreach(b =>
-              println("IOConnection Sent " + ByteString(b.duplicate))
-            )
-          case _ =>
-        }
-        super.baseCommandPipeline(x)
-
-      }
-    }), nextConnectionActorName)
+    context.actorOf(Props(new DefaultIOConnectionActor(connection, pipelineStage)), nextConnectionActorName)
   }
 
   import settings.{StatsSupport => _, _}

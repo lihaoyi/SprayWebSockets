@@ -112,7 +112,6 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
       val commandPipeline: CPL = {
         case f: FrameCommand =>
           val buffer = ByteBuffer.wrap(Frame.write(f.frame))
-          println("Server Sending " + ByteString(buffer.duplicate()))
           commandPL(IOConnection.Send(buffer))
         case x => commandPL(x)
       }
@@ -129,7 +128,6 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
               case Incomplete =>
                 false
               case TooLarge =>
-                println("Too Large, Closing")
                 Closing.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
                 false
             }
