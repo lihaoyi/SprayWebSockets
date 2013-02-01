@@ -1,6 +1,11 @@
 package spray.can.server.websockets.model
 
 class OpCode(val value: Byte)
+/**
+ * All the opcodes a frame can have, defined in the spec
+ *
+ * http://tools.ietf.org/html/rfc6455
+ */
 object OpCode{
   def apply(n: Int) = n match{
     case 0 => Continuation
@@ -17,7 +22,15 @@ object OpCode{
   object Ping extends OpCode(9)
   object Pong extends OpCode(10)
 }
+
+
 class CloseCode(val statusCode: Short)
+
+/**
+ * All the connection closing status codes, defined in the spec
+ *
+ * http://tools.ietf.org/html/rfc6455
+ */
 object CloseCode{
   object NormalClosure extends CloseCode(1000)
   object GoingAway extends CloseCode(1001)

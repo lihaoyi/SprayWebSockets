@@ -15,6 +15,18 @@ import spray.http.HttpHeaders.RawHeader
 import spray.http.HttpResponse
 import akka.util.ByteString
 
+/**
+ * Just like a HttpServer, but with
+ *
+ * - frameHandler to decide who handles the incoming websocket frames after upgrade
+ * - frameSizeLimit to prevent ginormous frames from causing crashes
+ * - an auto-ping interval to keep sending pings.
+ *
+ * It behaves identically to a normal HttpServer until the httpHandler
+ * responds with an Upgrade message. It then creates/finds an actor to
+ * handle the websocket frames using frameHandler, completes the websocket
+ * handshake, and lets the websocket frames start flowing
+ */
 class SocketServer(httpHandler: MessageHandler,
                    frameHandler: Any => ActorRef,
                    settings: ServerSettings = ServerSettings(),
@@ -48,6 +60,10 @@ class SocketServer(httpHandler: MessageHandler,
 
 }
 
+/**
+ * Convenience building blocks to deal with the websocket upgrade
+ * request (doing the calculate-hash-dance, headers, blah blah)
+ */
 object SocketServer{
 
   def apply(acceptHandler: MessageHandler,

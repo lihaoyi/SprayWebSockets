@@ -10,7 +10,16 @@ import spray.io.IOConnection.Tell
 import akka.util.ByteString
 import akka.actor.{Props, Actor, ActorRef}
 
+/**
+ * Stores handy socket pipeline related stuff
+ */
 object Closing{
+  /**
+   * Cleanly closes the websocket pipeline
+   *
+   * - Sends a "Close" frame
+   * - Sends a message to kill the IOConnection
+   */
   def close(commandPL : Pipeline[Command], closeCode: Short, message: String) = {
     val closeCodeData = ByteString(
       ByteBuffer.allocate(2)
@@ -25,10 +34,15 @@ object Closing{
  * This pipeline stage simply forwards the events to and receives commands from
  * the given MessageHandler. It is the final stage of the websocket pipeline,
  * and is how the pipeline interacts with user code.
+ *
+ * @param handler the actor which will receive the incoming Frames
  */
 case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
   def apply(pcontext: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines{
+      // This actor lets the `handler` reply with naked Frames, and it
+      // will wrap them in FrameCommands before pushing them through
+      // the pipeline
       val receiveAdapter = pcontext.connectionActorContext.actorOf(Props(new Actor{
         def receive = {
           case f: Frame => pcontext.self ! FrameCommand(f)
@@ -55,9 +69,9 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
  * Does the fancy websocket stuff, handling:
  *
  * - Consolidating fragmented packets
- * - Emitting Pings
  * - Responding to Pings
  * - Responding to Closed()
+ * - Closing the connection if a frames is malformed
  *
  */
 case class Consolidation(maxMessageLength: Long) extends PipelineStage{
@@ -79,7 +93,7 @@ case class Consolidation(maxMessageLength: Long) extends PipelineStage{
           commandPL(IOConnection.Close(spray.util.ConnectionCloseReasons.CleanClose))
 
         case FrameEvent(f @ Frame(true, _, Ping, _, _)) =>
-          val newF = f.copy(maskingKey = None)
+          val newF = f.copy(opcode = Pong, maskingKey = None)
           commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(newF))))
 
         case FrameEvent(f @ Frame(false, _, _, _, _)) =>
@@ -102,8 +116,9 @@ case class Consolidation(maxMessageLength: Long) extends PipelineStage{
 
 /**
  * Deserializes IOBridge.Received events into FrameEvents, and serializes
- * FrameCommands into IOConnection.Send commands. Otherwise does not do anything
- * fancy.
+ * FrameCommands into IOConnection.Send commands. Also enforces the limits on
+ * how big a message can be, whether a message in a single big frame or a message
+ * spread out over multiple frames. Otherwise does not do anything fancy.
  */
 case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
@@ -140,6 +155,15 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
     }
 }
 
+/**
+ * A stage that can become either of two pipelines. It starts off using stage1,
+ * and when an Upgrade message is received, it'll combine the message with stage2
+ * to create its new pipeline
+ *
+ * @param stage1 The first stage
+ * @param stage2 a function which generates its second stage, based on the
+ *               contents of the Upgrade
+ */
 case class Switching(stage1: PipelineStage, stage2: Any => PipelineStage) extends PipelineStage {
 
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =

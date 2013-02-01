@@ -4,6 +4,9 @@ import java.nio.ByteBuffer
 import java.io.{DataOutputStream, ByteArrayOutputStream}
 import akka.util.ByteString
 
+/**
+ * Deals with serializing/deserializing Frames from Bytes
+ */
 object Frame{
   sealed trait ParsedFrame
   case class Successful(frame: Frame) extends ParsedFrame
@@ -109,7 +112,6 @@ object Frame{
     out.write(array)
     byteOutStream.toByteArray
   }
-
 }
 
 case class Frame(FIN: Boolean = true,

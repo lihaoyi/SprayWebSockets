@@ -29,7 +29,6 @@ class SocketServerTests extends FreeSpec with Eventually{
   implicit val timeout = akka.util.Timeout(5 seconds)
 
   implicit val sslContext = createSslContext("/ssl-test-keystore.jks", "")
-  implicit val sslContextProvider = SSLContextProvider.forContext(sslContext)
   def createSslContext(keyStoreResource: String, password: String): SSLContext = {
     val keyStore = KeyStore.getInstance("jks")
     val res = getClass.getResourceAsStream(keyStoreResource)
@@ -44,11 +43,20 @@ class SocketServerTests extends FreeSpec with Eventually{
     context
   }
 
+  /**
+   * Provides convenience methods on an ActorRef so you don't need to keep
+   * typing Await.result(..., 10 seconds) blah blah blah and other annoying things
+   */
   implicit class blockActorRef(a: ActorRef){
     def send(b: Frame) = {
       a ! IOClientConnection.Send(ByteBuffer.wrap(Frame.write(b)))
     }
 
+    /**
+     * Sends a frame and waits for the reply, buffering up the incoming bytes
+     * (since they could come over a period of time) and trying to parse it
+     * into an entire frame
+     */
     def await(b: Frame): Frame = {
       @volatile var buffer = ByteString.empty
       val x = TestActorRef(new Actor {
@@ -73,6 +81,9 @@ class SocketServerTests extends FreeSpec with Eventually{
     "Connection: Upgrade\r\n" +
     "Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==\r\n\r\n"
 
+  /**
+   * HttpHandler which always accepts websocket upgrade requests
+   */
   class AcceptActor extends Actor{
     def receive = {
       case req: HttpRequest =>
@@ -81,6 +92,11 @@ class SocketServerTests extends FreeSpec with Eventually{
       case x =>
     }
   }
+
+  /**
+   * Websocket frameHandler which echoes any frames sent to it, but
+   * capitalizes them and keeps count so you know it's alive
+   */
   class EchoActor extends Actor{
     var count = 0
     def receive = {
@@ -90,6 +106,10 @@ class SocketServerTests extends FreeSpec with Eventually{
       case x =>
     }
   }
+
+  /**
+   * Sets up a SocketServer and a IOClientConnection talking to it.
+   */
   def setupConnection(port: Int, maxMessageLength: Long = Long.MaxValue, settings: ServerSettings = ServerSettings()) = {
     val httpHandler = SingletonHandler(system.actorOf(Props(new AcceptActor)))
     val frameHandler = system.actorOf(Props(new EchoActor))
@@ -108,9 +128,13 @@ class SocketServerTests extends FreeSpec with Eventually{
 
     connection
   }
-  def doTwice(stuff: ActorRef => Unit) = {
-    "basic" in stuff(setupConnection(1000 + util.Random.nextInt(10000), maxMessageLength = 1024))
-    "ssl" in stuff(setupConnection(1000 + util.Random.nextInt(10000), settings = new ServerSettings{
+
+  /**
+   * Registers the given test twice, with and without SSL.
+   */
+  def doTwice(test: ActorRef => Unit) = {
+    "basic" in test(setupConnection(1000 + util.Random.nextInt(10000), maxMessageLength = 1024))
+    "ssl" in test(setupConnection(1000 + util.Random.nextInt(10000), settings = new ServerSettings{
       override val SSLEncryption = true
     }, maxMessageLength = 1024))
   }
@@ -124,8 +148,6 @@ class SocketServerTests extends FreeSpec with Eventually{
 
       val r4 = connection await frame
       assert(r4.stringData === "I AM COW2")
-      
-
     }
     "Testing ability to receive fragmented message" - doTwice{ connection =>
 
@@ -226,6 +248,15 @@ class SocketServerTests extends FreeSpec with Eventually{
           }
         }
       }
+    }
+    "ping pong" - doTwice{connection =>
+      val res1 = connection await Frame(opcode = OpCode.Ping, data = ByteString("hello ping"), maskingKey = Some(12345))
+      assert(res1.stringData === "hello ping")
+      assert(res1.opcode === OpCode.Pong)
+
+      val res2 = connection await Frame(opcode = OpCode.Ping, data = ByteString("hello ping again"), maskingKey = Some(12345))
+      assert(res2.stringData === "hello ping again")
+      assert(res2.opcode === OpCode.Pong)
     }
   }
 
