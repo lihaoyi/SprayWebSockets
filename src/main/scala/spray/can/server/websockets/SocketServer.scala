@@ -7,11 +7,13 @@ import spray.http._
 import java.security.MessageDigest
 
 import spray.can.server.ServerSettings
-import spray.http.HttpHeaders.RawHeader
-import spray.http.HttpResponse
 import spray.io.Connection
 import akka.actor.{Props, ActorRef}
 import concurrent.duration._
+import spray.io.IOConnection._
+import spray.http.HttpHeaders.RawHeader
+import spray.http.HttpResponse
+import akka.util.ByteString
 
 class SocketServer(httpHandler: MessageHandler,
                    frameHandler: Any => ActorRef,
@@ -23,8 +25,17 @@ class SocketServer(httpHandler: MessageHandler,
 
   override def createConnectionActor(connection: Connection) = {
     context.actorOf(Props(new DefaultIOConnectionActor(connection, pipelineStage){
-      override def receive = {
-        case x => super.receive(x)
+
+      override def baseCommandPipeline: Pipeline[Command] = { x =>
+        x match{
+          case Send(buffers, _) =>
+            buffers.foreach(b =>
+              println("IOConnection Sent " + ByteString(b.duplicate))
+            )
+          case _ =>
+        }
+        super.baseCommandPipeline(x)
+
       }
     }), nextConnectionActorName)
   }
