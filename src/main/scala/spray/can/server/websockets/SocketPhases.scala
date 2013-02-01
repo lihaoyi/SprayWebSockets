@@ -32,8 +32,10 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
       val receiveAdapter = pcontext.connectionActorContext.actorOf(Props(new Actor{
         def receive = {
           case f: Frame => pcontext.self ! FrameCommand(f)
+
         }
       }))
+      handler ! "WebsocketConnected"
       val commandPipeline: CPL = {
         case f @ FrameCommand(c) =>
           commandPL(f)
@@ -43,6 +45,7 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
         case f @ FrameEvent(e) =>
           commandPL(Tell(handler, e, receiveAdapter))
         case c: IOBridge.Closed => commandPL(Tell(handler, c, receiveAdapter))
+
       }
     }
 }

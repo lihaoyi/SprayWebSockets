@@ -24,9 +24,7 @@ class SocketServer(httpHandler: MessageHandler,
   override def createConnectionActor(connection: Connection) = {
     context.actorOf(Props(new DefaultIOConnectionActor(connection, pipelineStage){
       override def receive = {
-        case x =>
-
-        super.receive(x)
+        case x => super.receive(x)
       }
     }), nextConnectionActorName)
   }

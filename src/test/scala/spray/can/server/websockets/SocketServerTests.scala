@@ -27,7 +27,21 @@ class SocketServerTests extends FreeSpec with Eventually{
   implicit val system = ActorSystem()
   implicit val timeout = akka.util.Timeout(5 seconds)
 
-
+  implicit val sslContext = createSslContext("/ssl-test-keystore.jks", "")
+  implicit val sslContextProvider = SSLContextProvider.forContext(sslContext)
+  def createSslContext(keyStoreResource: String, password: String): SSLContext = {
+    val keyStore = KeyStore.getInstance("jks")
+    val res = getClass.getResourceAsStream(keyStoreResource)
+    require(res != null)
+    keyStore.load(res, password.toCharArray)
+    val keyManagerFactory = KeyManagerFactory.getInstance("SunX509")
+    keyManagerFactory.init(keyStore, password.toCharArray)
+    val trustManagerFactory = TrustManagerFactory.getInstance("SunX509")
+    trustManagerFactory.init(keyStore)
+    val context = SSLContext.getInstance("SSL")
+    context.init(keyManagerFactory.getKeyManagers, trustManagerFactory.getTrustManagers, new SecureRandom)
+    context
+  }
 
   implicit class blockActorRef(a: ActorRef){
     def send(b: Frame) = {
@@ -35,7 +49,9 @@ class SocketServerTests extends FreeSpec with Eventually{
 
     }
     def await(b: Frame): Frame = {
-      Frame.read(Await.result(a ? IOClientConnection.Send(ByteBuffer.wrap(Frame.write(b))), 1 seconds).asInstanceOf[Received].buffer)
+      val res = Await.result(a ? IOClientConnection.Send(ByteBuffer.wrap(Frame.write(b))), 1 seconds).asInstanceOf[Received]
+      println("Awaiting: " + res + " " + ByteString(res.buffer))
+      Frame.read(res.buffer)
            .asInstanceOf[Successful]
            .frame
 
@@ -66,8 +82,7 @@ class SocketServerTests extends FreeSpec with Eventually{
       case x =>
     }
   }
-  def setupConnection(port: Int, maxMessageLength: Long = Long.MaxValue, settings: ServerSettings = ServerSettings())
-                     (implicit sslEngineProvider: ServerSSLEngineProvider, clientEngineProvider: ClientSSLEngineProvider) = {
+  def setupConnection(port: Int, maxMessageLength: Long = Long.MaxValue, settings: ServerSettings = ServerSettings()) = {
     val httpHandler = SingletonHandler(system.actorOf(Props(new AcceptActor)))
     val frameHandler = system.actorOf(Props(new EchoActor))
     val server = system.actorOf(Props(SocketServer(httpHandler, x => frameHandler, settings, frameSizeLimit = maxMessageLength)))
@@ -76,7 +91,7 @@ class SocketServerTests extends FreeSpec with Eventually{
     val connection = TestActorRef(new IOClientConnection{
       override def pipelineStage =
         DefaultPipelineStage >>
-        SslTlsSupport(clientEngineProvider) ? settings.SSLEncryption
+        SslTlsSupport(ClientSSLEngineProvider.default) ? settings.SSLEncryption
       override def connected = { case x =>
         println("IOClientConnection received " + x)
         super.connected(x)
@@ -89,6 +104,8 @@ class SocketServerTests extends FreeSpec with Eventually{
     Thread.sleep(1)
     connection
   }
+
+
   "Echo Server Tests" - {
 
 
@@ -209,6 +226,18 @@ class SocketServerTests extends FreeSpec with Eventually{
         }
       }
     }
+  }
+  "ssl" in {
+    val connection = setupConnection(1001, settings = new ServerSettings{
+      override val SSLEncryption = true
+    })
+
+    def frame = Frame(true, (false, false, false), OpCode.Text, Some(12345123), "i am cow".getBytes)
+    val r3 = connection await frame
+    assert(r3.stringData === "I AM COW1")
+
+    val r4 = connection await frame
+    assert(r4.stringData === "I AM COW2")
   }
 
 }
