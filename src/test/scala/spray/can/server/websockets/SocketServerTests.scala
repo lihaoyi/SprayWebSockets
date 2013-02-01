@@ -50,7 +50,7 @@ class SocketServerTests extends FreeSpec with Eventually{
     }
     def await(b: Frame): Frame = {
       val res = Await.result(a ? IOClientConnection.Send(ByteBuffer.wrap(Frame.write(b))), 1 seconds).asInstanceOf[Received]
-      println("Awaiting: " + res + " " + ByteString(res.buffer))
+      println("Awaiting: " + res + " " + ByteString(res.buffer.duplicate))
       Frame.read(res.buffer)
            .asInstanceOf[Successful]
            .frame
