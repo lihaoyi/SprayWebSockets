@@ -6,9 +6,10 @@ import OpCode._
 import spray.io._
 import java.nio.ByteBuffer
 import spray.io.TickGenerator.Tick
-import spray.io.IOConnection.Tell
+import spray.io.IOConnection.{Close, Tell}
 import akka.util.ByteString
 import akka.actor.{Props, Actor, ActorRef}
+import spray.util.ConnectionCloseReasons.CleanClose
 
 /**
  * Stores handy socket pipeline related stuff
@@ -45,25 +46,24 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
       // the pipeline
       val receiveAdapter = pcontext.connectionActorContext.actorOf(Props(new Actor{
         def receive = {
-          case f: Frame => pcontext.self ! FrameCommand(f)
-
+          case f: Frame =>  pcontext.self ! FrameCommand(f)
+          case x: Close =>         pcontext.self ! IOConnection.Close(CleanClose)
         }
       }))
-      handler ! "WebsocketConnected"
+
       val commandPipeline: CPL = {
-        case f @ FrameCommand(c) =>
-          commandPL(f)
+        case f => commandPL(f)
       }
 
       val eventPipeline: EPL = {
-        case f @ FrameEvent(e) =>
-          commandPL(Tell(handler, e, receiveAdapter))
+        case f @ FrameEvent(e) => commandPL(Tell(handler, e, receiveAdapter))
         case c: IOBridge.Closed => commandPL(Tell(handler, c, receiveAdapter))
-
+        case WebsocketConnected =>
+          println("WSFE got WebsocketConnected")
+          commandPL(Tell(handler, WebsocketConnected, receiveAdapter))
       }
     }
 }
-
 
 /**
  * Does the fancy websocket stuff, handling:
@@ -79,8 +79,7 @@ case class Consolidation(maxMessageLength: Long) extends PipelineStage{
     new Pipelines {
       var stored: Option[Frame] = None
       val commandPipeline: CPL = {
-        case x =>
-          commandPL(x)
+        case x => commandPL(x)
       }
 
       val eventPipeline: EPL = {
@@ -108,6 +107,8 @@ case class Consolidation(maxMessageLength: Long) extends PipelineStage{
             stored = None
           }
 
+        case WebsocketConnected => eventPL(WebsocketConnected)
+
         case msg =>
           eventPL(msg)
       }
@@ -128,7 +129,9 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
         case f: FrameCommand =>
           val buffer = ByteBuffer.wrap(Frame.write(f.frame))
           commandPL(IOConnection.Send(buffer))
-        case x => commandPL(x)
+        case x =>
+          println("frameparsing command " + x)
+          commandPL(x)
       }
 
       val eventPipeline: EPL = {
@@ -148,7 +151,7 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
             }
           ){}
           streamBuffer = ByteString(buffer)
-
+        case WebsocketConnected => eventPL(WebsocketConnected)
         case Tick => () // ignore Ticks, do not propagate
         case x => eventPL(x)
       }
@@ -176,10 +179,16 @@ case class Switching(stage1: PipelineStage, stage2: Any => PipelineStage) extend
       // it is important to introduce the proxy to the var here
       def commandPipeline: CPL = {
         case Response(_, u @ Upgrade(msg)) =>
+          println("Switching")
           val pl2 = stage2(msg)(context, commandPL, eventPL)
           eventPLVar = pl2.eventPipeline
-          commandPLVar = pl2.commandPipeline
+          commandPLVar = { x =>
+            println("omg " + x)
+            pl2.commandPipeline(x)
+          }
+          eventPLVar(WebsocketConnected)
         case c =>
+          println("switching command " + c)
           commandPLVar(c)
       }
       def eventPipeline: EPL = {

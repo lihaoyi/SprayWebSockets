@@ -23,3 +23,5 @@ case class FrameCommand(frame: Frame) extends Command
  *             that will handle the subsequent websocket frames
  */
 case class Upgrade(data: Any) extends Command
+
+case object WebsocketConnected extends Event

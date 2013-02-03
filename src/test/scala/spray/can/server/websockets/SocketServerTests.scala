@@ -2,9 +2,10 @@ package spray.can.server.websockets
 
 import model._
 import model.Frame.Successful
-import model.OpCode.Text
+import model.Frame.Successful
+import model.OpCode.{ConnectionClose, Text}
 import org.scalatest.FreeSpec
-import akka.actor.{ActorRef, Props, Actor, ActorSystem}
+import akka.actor._
 import concurrent.duration._
 import spray.io._
 import akka.pattern._
@@ -22,6 +23,11 @@ import spray.io.IOClientConnection.DefaultPipelineStage
 import javax.net.ssl.{TrustManagerFactory, KeyManagerFactory, SSLContext}
 import java.security.{SecureRandom, KeyStore}
 import spray.io.IOConnection.Tell
+import spray.io.SingletonHandler
+import scala.Some
+import spray.can.server.websockets.Upgrade
+import spray.io.IOBridge.Received
+import spray.util.ConnectionCloseReasons.CleanClose
 
 class SocketServerTests extends FreeSpec with Eventually{
   implicit def byteArrayToBuffer(array: Array[Byte]) = ByteString(array)
@@ -90,6 +96,7 @@ class SocketServerTests extends FreeSpec with Eventually{
         sender ! SocketServer.acceptAllFunction(req)
         sender ! Upgrade(1)
       case x =>
+        println(x)
     }
   }
 
@@ -110,14 +117,17 @@ class SocketServerTests extends FreeSpec with Eventually{
   /**
    * Sets up a SocketServer and a IOClientConnection talking to it.
    */
-  def setupConnection(port: Int, maxMessageLength: Long = Long.MaxValue, settings: ServerSettings = ServerSettings()) = {
-    val httpHandler = SingletonHandler(system.actorOf(Props(new AcceptActor)))
+  def setupConnection(port: Int,
+                      serverActor: () => Actor = () => new AcceptActor,
+                      maxMessageLength: Long = Long.MaxValue,
+                      settings: ServerSettings = ServerSettings()) = {
+
+    val httpHandler = SingletonHandler(system.actorOf(Props(serverActor())))
     val frameHandler = system.actorOf(Props(new EchoActor))
     val server = system.actorOf(Props(SocketServer(httpHandler, x => frameHandler, settings, frameSizeLimit = maxMessageLength)))
     Await.result(server ? IOServer.Bind("localhost", port), 10 seconds)
 
     val connection = TestActorRef(new IOClientConnection{
-
       override def pipelineStage =
         DefaultPipelineStage >>
         SslTlsSupport(ClientSSLEngineProvider.default) ? settings.SSLEncryption
@@ -140,8 +150,48 @@ class SocketServerTests extends FreeSpec with Eventually{
   }
 
   "Echo Server Tests" - {
-    "hello world with echo server" - doTwice{ connection =>
+    "The WebsocketConnectedMessage must be sent from the right actor" in {
+      @volatile var messageReceived = false
+      @volatile var closed = false
+      class KActor extends Actor{
+        def receive = {
+          case req: HttpRequest =>
+            sender ! SocketServer.acceptAllFunction(req)
+            sender ! Upgrade(1)
+          case WebsocketConnected =>
+            val closeCodeData = ByteString(
+              ByteBuffer.allocate(2)
+                .putShort(1002)
+                .rewind().asInstanceOf[ByteBuffer]
+            )
+            sender ! Frame(opcode = ConnectionClose, data = closeCodeData)
+            messageReceived = true
+          case IOConnection.Closed(_, _) =>
+            closed = true
+        }
+      }
 
+      val frameHandler = system.actorOf(Props(new KActor()))
+      val httpHandler = SingletonHandler(frameHandler)
+
+      val server = system.actorOf(Props(SocketServer(httpHandler, x => frameHandler)))
+
+      Await.result(server ? IOServer.Bind("localhost", 10212), 10 seconds)
+
+      val connection = TestActorRef(new IOClientConnection{})
+
+      Await.result(connection ? IOClientConnection.Connect("localhost", 10212), 10 seconds)
+      Await.result(connection ? IOClientConnection.Send(ByteBuffer.wrap(websocketClientHandshake.getBytes)), 10 seconds)
+
+      eventually{
+        assert(messageReceived === true)
+      }
+      eventually {
+        assert(closed === true)
+      }
+
+    }
+    "hello world with echo server" - doTwice{ connection =>
       def frame = Frame(true, (false, false, false), OpCode.Text, Some(12345123), "i am cow".getBytes)
       val r3 = connection await frame
       assert(r3.stringData === "I AM COW1")
