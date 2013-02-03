@@ -59,7 +59,6 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
         case f @ FrameEvent(e) => commandPL(Tell(handler, e, receiveAdapter))
         case c: IOBridge.Closed => commandPL(Tell(handler, c, receiveAdapter))
         case WebsocketConnected =>
-          println("WSFE got WebsocketConnected")
           commandPL(Tell(handler, WebsocketConnected, receiveAdapter))
       }
     }
@@ -130,7 +129,6 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
           val buffer = ByteBuffer.wrap(Frame.write(f.frame))
           commandPL(IOConnection.Send(buffer))
         case x =>
-          println("frameparsing command " + x)
           commandPL(x)
       }
 
@@ -179,17 +177,11 @@ case class Switching(stage1: PipelineStage, stage2: Any => PipelineStage) extend
       // it is important to introduce the proxy to the var here
       def commandPipeline: CPL = {
         case Response(_, u @ Upgrade(msg)) =>
-          println("Switching")
           val pl2 = stage2(msg)(context, commandPL, eventPL)
           eventPLVar = pl2.eventPipeline
-          commandPLVar = { x =>
-            println("omg " + x)
-            pl2.commandPipeline(x)
-          }
+          commandPLVar = pl2.commandPipeline
           eventPLVar(WebsocketConnected)
-        case c =>
-          println("switching command " + c)
-          commandPLVar(c)
+        case c => commandPLVar(c)
       }
       def eventPipeline: EPL = {
         c => eventPLVar(c)
