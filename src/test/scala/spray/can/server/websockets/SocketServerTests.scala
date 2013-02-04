@@ -22,6 +22,8 @@ import spray.io.SingletonHandler
 import scala.Some
 
 import spray.io.IOBridge.Received
+import spray.io.IOConnection.Tell
+import org.scalatest.time.{Seconds, Span}
 
 class SocketServerTests extends FreeSpec with Eventually{
   implicit def byteArrayToBuffer(array: Array[Byte]) = ByteString(array)
@@ -58,18 +60,26 @@ class SocketServerTests extends FreeSpec with Eventually{
      * into an entire frame
      */
     def await(b: Frame): Frame = {
+      await(IOClientConnection.Send(ByteBuffer.wrap(Frame.write(b))))
+    }
+    /**
+     * Sends a frame and waits for the reply, buffering up the incoming bytes
+     * (since they could come over a period of time) and trying to parse it
+     * into an entire frame
+     */
+    def await(c: Command): Frame = {
       @volatile var buffer = ByteString.empty
       val x = TestActorRef(new Actor {
         def receive = {
           case Received(_, data) => buffer = buffer ++ ByteString(data)
         }
       })
-      a.tell(IOClientConnection.Send(ByteBuffer.wrap(Frame.write(b))), x)
+      a.tell(c, x)
       eventually {
         Frame.read(buffer.asByteBuffer)
              .asInstanceOf[Successful]
              .frame
-      }
+      }(PatienceConfig(Span(1, Seconds)))
 
     }
   }
@@ -89,8 +99,7 @@ class SocketServerTests extends FreeSpec with Eventually{
       case req: HttpRequest =>
         sender ! SocketServer.acceptAllFunction(req)
         sender ! SocketServer.Upgrade(1)
-      case x =>
-        println(x)
+      case x => println(x)
     }
   }
 
@@ -111,14 +120,21 @@ class SocketServerTests extends FreeSpec with Eventually{
   /**
    * Sets up a SocketServer and a IOClientConnection talking to it.
    */
-  def setupConnection(port: Int,
+  def setupConnection(port: Int = 1000 + util.Random.nextInt(10000),
                       serverActor: () => Actor = () => new AcceptActor,
                       maxMessageLength: Long = Long.MaxValue,
+                      autoPingInterval: Duration = 5 seconds,
                       settings: ServerSettings = ServerSettings()) = {
-
+    println("Setup " + autoPingInterval)
     val httpHandler = SingletonHandler(system.actorOf(Props(serverActor())))
     val frameHandler = system.actorOf(Props(new EchoActor))
-    val server = system.actorOf(Props(SocketServer(httpHandler, x => frameHandler, settings, frameSizeLimit = maxMessageLength)))
+    val server = system.actorOf(Props(SocketServer(
+      httpHandler,
+      x => frameHandler,
+      settings,
+      frameSizeLimit = maxMessageLength,
+      autoPingInterval = autoPingInterval
+    )))
     Await.result(server ? IOServer.Bind("localhost", port), 10 seconds)
 
     val connection = TestActorRef(new IOClientConnection{
@@ -136,11 +152,17 @@ class SocketServerTests extends FreeSpec with Eventually{
   /**
    * Registers the given test twice, with and without SSL.
    */
-  def doTwice(test: ActorRef => Unit) = {
-    "basic" in test(setupConnection(1000 + util.Random.nextInt(10000), maxMessageLength = 1024))
-    "ssl" in test(setupConnection(1000 + util.Random.nextInt(10000), settings = new ServerSettings{
+  def doTwice(port: Int = 1000 + util.Random.nextInt(10000),
+              serverActor: () => Actor = () => new AcceptActor,
+              maxMessageLength: Long = Long.MaxValue,
+              autoPingInterval: Duration = 5 seconds,
+              settings: ServerSettings = ServerSettings())
+             (test: ActorRef => Unit) = {
+    println("DoTwice " + autoPingInterval)
+    "basic" in test(setupConnection(port, serverActor, maxMessageLength, autoPingInterval, settings))
+    "ssl" in test(setupConnection(port + 1, serverActor, maxMessageLength, autoPingInterval, new ServerSettings{
       override val SSLEncryption = true
-    }, maxMessageLength = 1024))
+    }))
   }
 
   "Echo Server Tests" - {
@@ -185,7 +207,7 @@ class SocketServerTests extends FreeSpec with Eventually{
       }
 
     }
-    "hello world with echo server" - doTwice{ connection =>
+    "hello world with echo server" - doTwice(){ connection =>
       def frame = Frame(true, (false, false, false), OpCode.Text, Some(12345123), "i am cow".getBytes)
       val r3 = connection await frame
       assert(r3.stringData === "I AM COW1")
@@ -193,7 +215,7 @@ class SocketServerTests extends FreeSpec with Eventually{
       val r4 = connection await frame
       assert(r4.stringData === "I AM COW2")
     }
-    "Testing ability to receive fragmented message" - doTwice{ connection =>
+    "Testing ability to receive fragmented message" - doTwice(){ connection =>
 
       val result1 = {
         connection send Frame(FIN = false, opcode = OpCode.Text, maskingKey = Some(12345123), data = "i am cow ".getBytes)
@@ -212,7 +234,7 @@ class SocketServerTests extends FreeSpec with Eventually{
       
     }
     "Ping/Pong" - {
-      "simple responses" - doTwice{ connection =>
+      "simple responses" - doTwice(){ connection =>
         
         val res1 = connection await Frame(opcode = OpCode.Ping, maskingKey = Some(123456), data = "i am cow".getBytes)
         assert(res1.stringData === "i am cow")
@@ -220,7 +242,7 @@ class SocketServerTests extends FreeSpec with Eventually{
         assert(res2.stringData === "i am cow")
       
       }
-      "responding in middle of fragmented message" - doTwice{connection =>
+      "responding in middle of fragmented message" - doTwice(){connection =>
         val result1 = {
           connection send Frame(FIN = false, opcode = OpCode.Text, maskingKey = Some(12345123), data = "i am cow ".getBytes)
           connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(2139), data = "hear me moo ".getBytes)
@@ -241,14 +263,14 @@ class SocketServerTests extends FreeSpec with Eventually{
     }
 
     "Closing Tests" - {
-      "Clean Close" - doTwice{ connection =>
+      "Clean Close" - doTwice(){ connection =>
         val res1 = connection await Frame(opcode = OpCode.ConnectionClose, maskingKey = Some(0))
         assert(res1.opcode === OpCode.ConnectionClose)
         eventually{
           assert(connection.isTerminated === true)
         }
       }
-      "The server MUST close the connection upon receiving a frame that is not masked" - doTwice{ connection =>
+      "The server MUST close the connection upon receiving a frame that is not masked" - doTwice(){ connection =>
         val res1 = connection await Frame(opcode = OpCode.Text, data = ByteString("lol"))
         assert(res1.opcode === OpCode.ConnectionClose)
         assert(res1.data.asByteBuffer.getShort === CloseCode.ProtocolError.statusCode)
@@ -258,7 +280,7 @@ class SocketServerTests extends FreeSpec with Eventually{
       }
 
       "The server must close the connection if the frame is too large" - {
-        "single large frame" - doTwice{ connection =>
+        "single large frame" - doTwice(maxMessageLength = 1024){ connection =>
         // just below the limit works
           val res1 = connection await Frame(opcode = OpCode.Text, data = ByteString("l" * 1024), maskingKey = Some(0))
           assert(res1.opcode === OpCode.Text)
@@ -272,7 +294,7 @@ class SocketServerTests extends FreeSpec with Eventually{
           }
         
         }
-        "fragmented large frame" - doTwice{ connection =>
+        "fragmented large frame" - doTwice(maxMessageLength = 1024){ connection =>
           // just below the limit works
           connection send Frame(FIN = false, opcode = OpCode.Text, data = ByteString("l" * 256), maskingKey = Some(0))
           connection send Frame(FIN = false, opcode = OpCode.Continuation, data = ByteString("l" * 256), maskingKey = Some(0))
@@ -293,14 +315,25 @@ class SocketServerTests extends FreeSpec with Eventually{
         }
       }
     }
-    "ping pong" - doTwice{connection =>
-      val res1 = connection await Frame(opcode = OpCode.Ping, data = ByteString("hello ping"), maskingKey = Some(12345))
-      assert(res1.stringData === "hello ping")
-      assert(res1.opcode === OpCode.Pong)
+    "pinging" - {
 
-      val res2 = connection await Frame(opcode = OpCode.Ping, data = ByteString("hello ping again"), maskingKey = Some(12345))
-      assert(res2.stringData === "hello ping again")
-      assert(res2.opcode === OpCode.Pong)
+      "ping pong" - doTwice(){connection =>
+        val res1 = connection await Frame(opcode = OpCode.Ping, data = ByteString("hello ping"), maskingKey = Some(12345))
+        assert(res1.stringData === "hello ping")
+        assert(res1.opcode === OpCode.Pong)
+
+        val res2 = connection await Frame(opcode = OpCode.Ping, data = ByteString("hello ping again"), maskingKey = Some(12345))
+        assert(res2.stringData === "hello ping again")
+        assert(res2.opcode === OpCode.Pong)
+
+      }
+      "auto ping" - doTwice(autoPingInterval = 300 milliseconds){connection =>
+        val res1 = connection await Tell(TestActorRef(new Actor{def receive = {case x =>}}), "lol", null)
+        assert(res1.opcode === OpCode.Ping)
+        val res2 = connection await Tell(TestActorRef(new Actor{def receive = {case x =>}}), "lol", null)
+        assert(res2.opcode === OpCode.Ping)
+
+      }
     }
   }
 

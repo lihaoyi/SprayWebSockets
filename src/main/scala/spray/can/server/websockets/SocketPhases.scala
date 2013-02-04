@@ -11,6 +11,7 @@ import akka.util.ByteString
 import akka.actor.{Props, Actor, ActorRef}
 import spray.util.ConnectionCloseReasons.CleanClose
 import websockets.SocketServer.{Upgrade, Connected}
+import concurrent.duration.{FiniteDuration, Duration, Deadline}
 
 /**
  * Stores handy socket pipeline related stuff
@@ -74,6 +75,7 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
         case f @ FrameEvent(e) => commandPL(Tell(handler, e, receiveAdapter))
         case c: SocketServer.Closed => commandPL(Tell(handler, c, receiveAdapter))
         case SocketServer.Connected => commandPL(Tell(handler, Connected, receiveAdapter))
+        case x => // ignore all other events, e.g. Ticks
       }
     }
 }
@@ -87,13 +89,17 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
  * - SocketPhases the connection if a frames is malformed
  *
  */
-case class Consolidation(maxMessageLength: Long) extends PipelineStage{
+case class Consolidation(maxMessageLength: Long,
+                         tickInterval: Duration,
+                         tickGenerator: () => Array[Byte]) extends PipelineStage{
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
+
       var stored: Option[Frame] = None
       val commandPipeline: CPL = {
         case x => commandPL(x)
       }
+      var lastTick: Deadline = Deadline.now
 
       val eventPipeline: EPL = {
         case FrameEvent(f @ Frame(_, _, _, None, _)) =>
@@ -120,10 +126,19 @@ case class Consolidation(maxMessageLength: Long) extends PipelineStage{
             stored = None
           }
 
-        case Connected => eventPL(Connected)
+        case Tick =>
+          tickInterval match{
+            case f: FiniteDuration if (Deadline.now - lastTick) > tickInterval =>
+              lastTick = Deadline.now
+              commandPipeline(FrameCommand(Frame(
+                opcode = OpCode.Ping,
+                data = ByteString(tickGenerator())
+              )))
+            case _ =>
+          }
 
-        case msg =>
-          eventPL(msg)
+
+        case msg => eventPL(msg)
       }
     }
 }
@@ -163,8 +178,7 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
             }
           ){}
           streamBuffer = ByteString(buffer)
-        case Connected => eventPL(Connected)
-        case Tick => () // ignore Ticks, do not propagate
+
         case x => eventPL(x)
       }
     }

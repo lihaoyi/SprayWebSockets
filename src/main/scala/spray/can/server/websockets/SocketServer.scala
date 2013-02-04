@@ -14,6 +14,7 @@ import spray.io.IOConnection._
 import spray.http.HttpHeaders.RawHeader
 import spray.http.HttpResponse
 import akka.util.ByteString
+import util.Random
 
 /**
  * Just like a HttpServer, but with
@@ -31,7 +32,8 @@ class SocketServer(httpHandler: MessageHandler,
                    frameHandler: Any => ActorRef,
                    settings: ServerSettings = ServerSettings(),
                    frameSizeLimit: Long = 1024 * 1024,
-                   autoPingInterval: Duration = 1 second)
+                   autoPingInterval: Duration = 1 second,
+                   tickGenerator: () => Array[Byte] = {() => val a = new Array[Byte](128); Random.nextBytes(a); a})
                   (implicit sslEngineProvider: ServerSSLEngineProvider)
                    extends HttpServer(httpHandler, settings) {
 
@@ -52,7 +54,7 @@ class SocketServer(httpHandler: MessageHandler,
       ConnectionTimeouts(IdleTimeout) ? (ReapingCycle > 0 && IdleTimeout > 0),
       (upgradeMsg: Any) =>
         WebsocketFrontEnd(frameHandler(upgradeMsg)) >>
-        Consolidation(frameSizeLimit) >>
+        Consolidation(frameSizeLimit, autoPingInterval, tickGenerator) >>
         FrameParsing(frameSizeLimit)
     ) >>
     SslTlsSupport(sslEngineProvider) ? SSLEncryption >>
@@ -72,6 +74,7 @@ object SocketServer{
             frameSizeLimit: Long = 1024 * 1024,
             autoPingInterval: Duration = 1 second)
            (implicit sslEngineProvider: ServerSSLEngineProvider): SocketServer = {
+    println("SocketServer " + autoPingInterval)
     new SocketServer(acceptHandler,  frameHandler, settings, frameSizeLimit, autoPingInterval)
   }
 
