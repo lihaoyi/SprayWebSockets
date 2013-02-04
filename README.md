@@ -23,10 +23,10 @@ It is essentially an extended HttpServer. In fact it should be a drop-in replace
 
 The additional arguments are:
 
--`frameHandler`: A function that is used to find/create an actor to handle a websocket connection. More on this later
--`frameSizeLimit`: the largest frames that the server will buffer up for you. Anything larger and it'll dump the data and close the connection with a message-to-big error
--`autoPingInterval`: How often the server should send keep-alive pings
--`tickGenerator`: How the server should decide what to put in the body of those pings. Defaults to just a bunch of random bytes.
+- `frameHandler`: A function that is used to find/create an actor to handle a websocket connection. More on this later
+- `frameSizeLimit`: the largest frames that the server will buffer up for you. Anything larger and it'll dump the data and close the connection with a message-to-big error
+- `autoPingInterval`: How often the server should send keep-alive pings
+- `tickGenerator`: How the server should decide what to put in the body of those pings. Defaults to just a bunch of random bytes.
 
 Protocol
 --------
