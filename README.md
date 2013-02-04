@@ -63,6 +63,8 @@ So far all this stuff is just normal usage of the `HttpServer`. This logic lives
 
 When you're done with the handshake, you must reply with an `SocketServer.Upgrade(data: Any)` message so the server can shift that connection into websocket-mode. The SocketServer will swap out the http-related pipeline with a websocket pipeline, and feed the `data` value into your provided `frameHandler` in order to find/create an actor to handle the websocket connection.
 
+If you need help, look at the [AcceptActor](https://github.com/lihaoyi/SprayWebSockets/blob/master/src/test/scala/spray/can/server/websockets/SocketServerTests.scala#L97-L104) in the unit tests to see how it does it. It uses a bunch of convenience methods that you could use to do the tedious bits (e.g. calculating hashes)
+
 ###Define a proper frameHandler 
 
 The `frameHandler` takes the `data` from the `SocketServer.Upgrade` message and find/create an actor (let's call him the *Frame Handler*) to handle the frames from that connection.
@@ -82,7 +84,7 @@ case class Frame(FIN: Boolean = true,
                  data: ByteString = ByteString.empty)
 ```
 
-and represents a single websocket frame.
+and represents a single websocket frame. Sending a `Frame` pipes it across the internet to whoever is on the other side, and any frames he pipes back will hit your *Frame Handler*'s `receive()` method. You've opened your first websocket connection! This is where the `SocketServer`'s job ends and your application can do whatever you want with the incoming `Frame`s.
 
 ###Close the Connection
 
