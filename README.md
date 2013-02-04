@@ -6,9 +6,9 @@ This is a implementation of a websocket server for the spray.io web toolkit. It 
 Getting Started
 ---------------
 
-The basic workflow for taking an existing HttpServer application and making it support websockets is:
+The basic workflow for taking an existing `HttpServer` application and making it support websockets is:
 
-### Substitute the SocketServer in place of an existing HttpServer (with a dummy (x: Any) => null frameHandler) and everything should keep working
+### Substitute the SocketServer in place of an existing HttpServer
 
 The main class of interest is the [SocketServer](https://github.com/lihaoyi/SprayWebSockets/blob/master/src/main/scala/spray/can/server/websockets/SocketServer.scala):
 
@@ -23,7 +23,7 @@ class SocketServer(httpHandler: MessageHandler,
                    extends HttpServer(httpHandler, settings)
 ```
 
-It is essentially an extended HttpServer. In fact it should be a drop-in replacement for a HttpServer: as long as you don't use any websocket functionality, its behavior should be identical.
+It is essentially an extended `HttpServer`. In fact it should be a drop-in replacement for a HttpServer: as long as you don't use any websocket functionality, its behavior should be identical. You can usea dummy `(x: Any) => null` `frameHandler` for now and everything should keep working.
 
 The additional arguments are:
 
