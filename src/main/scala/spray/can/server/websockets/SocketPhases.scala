@@ -44,7 +44,10 @@ object SocketPhases{
 }
 import SocketPhases.{FrameCommand,FrameEvent}
 
-
+/**
+ * Used to let the frameHandler send back unwrapped Frames, which it
+ * will wrap before putting into the pipeline
+ */
 class ReceiverProxy(pcontext: PipelineContext) extends Actor{
   def receive = {
     case f: SocketServer.Frame => pcontext.self ! FrameCommand(f)
@@ -62,9 +65,7 @@ class ReceiverProxy(pcontext: PipelineContext) extends Actor{
 case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
   def apply(pcontext: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines{
-      // This actor lets the `handler` reply with naked Frames, and it
-      // will wrap them in FrameCommands before pushing them through
-      // the pipeline
+
       val receiveAdapter = pcontext.connectionActorContext.actorOf(Props(new ReceiverProxy(pcontext)))
 
       val commandPipeline: CPL = {
