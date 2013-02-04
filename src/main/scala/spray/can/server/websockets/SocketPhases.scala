@@ -24,7 +24,7 @@ object SocketPhases{
    * - Sends a message to kill the IOConnection
    */
   def close(commandPL : Pipeline[Command], closeCode: Short, message: String) = {
-    val closeFrame = Frame(opcode = ConnectionClose, data = Frame.serializeCloseCode(closeCode))
+    val closeFrame = Frame(opcode = ConnectionClose, data = CloseCode.serializeCloseCode(closeCode))
     commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(closeFrame))))
     commandPL(IOConnection.Close(spray.util.ConnectionCloseReasons.ProtocolError(message)))
   }

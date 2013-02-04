@@ -14,12 +14,19 @@ import spray.can.server.websockets.model.OpCode.{Ping, ConnectionClose}
  */
 object Frame{
 
-  def serializeCloseCode(code: Short) = ByteString(
-    ByteBuffer.allocate(2)
-      .putShort(code)
-      .rewind().asInstanceOf[ByteBuffer]
-  )
 
+
+  /**
+   * Mutates the given byte array by XORing it with the given Int mask
+   */
+  def maskArray(array: Array[Byte], mask: Int) = {
+    var i = 0
+    while (i < array.length){
+      val j = 3 - i % 4
+      array(i) = (array(i) ^ (mask >> (8 * j)) & 0xff).toByte
+      i += 1
+    }
+  }
 
   sealed trait ParsedFrame
   case class Successful(frame: Frame) extends ParsedFrame
@@ -114,17 +121,7 @@ object Frame{
     byteOutStream.toByteArray
   }
 
-  /**
-   * Mutates the given byte array by XORing it with the given Int mask
-   */
-  def maskArray(array: Array[Byte], mask: Int) = {
-    var i = 0
-    while (i < array.length){
-      val j = 3 - i % 4
-      array(i) = (array(i) ^ (mask >> (8 * j)) & 0xff).toByte
-      i += 1
-    }
-  }
+
 }
 
 case class Frame(FIN: Boolean = true,

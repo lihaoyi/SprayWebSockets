@@ -1,5 +1,8 @@
 package spray.can.server.websockets.model
 
+import akka.util.ByteString
+import java.nio.ByteBuffer
+
 class OpCode(val value: Byte, val isControl: Boolean)
 /**
  * All the opcodes a frame can have, defined in the spec
@@ -27,7 +30,9 @@ object OpCode{
 }
 
 
-class CloseCode(val statusCode: Short)
+class CloseCode(val statusCode: Short){
+  def toByteString = CloseCode.serializeCloseCode(statusCode)
+}
 
 /**
  * All the connection closing status codes, defined in the spec
@@ -35,6 +40,16 @@ class CloseCode(val statusCode: Short)
  * http://tools.ietf.org/html/rfc6455
  */
 object CloseCode{
+  /**
+   * Converts a short into a bytestring to be used in the
+   * CloseConnection frames.
+   */
+  def serializeCloseCode(code: Short) = ByteString(
+    ByteBuffer.allocate(2)
+      .putShort(code)
+      .rewind().asInstanceOf[ByteBuffer]
+  )
+
   object NormalClosure extends CloseCode(1000)
   object GoingAway extends CloseCode(1001)
   object ProtocolError extends CloseCode(1002)
