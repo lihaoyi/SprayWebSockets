@@ -3,11 +3,24 @@ package spray.can.server.websockets.model
 import java.nio.ByteBuffer
 import java.io.{DataOutputStream, ByteArrayOutputStream}
 import akka.util.ByteString
+import spray.io._
+import scala.Some
+import scala.Some
+import scala.Some
+import spray.can.server.websockets.model.OpCode.{Ping, ConnectionClose}
 
 /**
  * Deals with serializing/deserializing Frames from Bytes
  */
 object Frame{
+
+  def serializeCloseCode(code: Short) = ByteString(
+    ByteBuffer.allocate(2)
+      .putShort(code)
+      .rewind().asInstanceOf[ByteBuffer]
+  )
+
+
   sealed trait ParsedFrame
   case class Successful(frame: Frame) extends ParsedFrame
   case object Incomplete extends ParsedFrame

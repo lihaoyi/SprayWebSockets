@@ -15,6 +15,7 @@ import spray.http.HttpHeaders.RawHeader
 import spray.http.HttpResponse
 import akka.util.ByteString
 import util.Random
+import java.nio.ByteBuffer
 
 /**
  * Just like a HttpServer, but with
@@ -97,7 +98,6 @@ object SocketServer{
       headers = socketAcceptHeaders(calculateReturnHash(x.headers).get)
     )
   }
-
 
   // The messages which are unique to a SocketServer
 

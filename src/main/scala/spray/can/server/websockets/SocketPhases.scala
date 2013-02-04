@@ -24,12 +24,8 @@ object SocketPhases{
    * - Sends a message to kill the IOConnection
    */
   def close(commandPL : Pipeline[Command], closeCode: Short, message: String) = {
-    val closeCodeData = ByteString(
-      ByteBuffer.allocate(2)
-                .putShort(closeCode)
-                .rewind().asInstanceOf[ByteBuffer]
-    )
-    commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(Frame(opcode = ConnectionClose, data = closeCodeData)))))
+    val closeFrame = Frame(opcode = ConnectionClose, data = Frame.serializeCloseCode(closeCode))
+    commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(closeFrame))))
     commandPL(IOConnection.Close(spray.util.ConnectionCloseReasons.ProtocolError(message)))
   }
   /**
@@ -44,16 +40,7 @@ object SocketPhases{
 }
 import SocketPhases.{FrameCommand,FrameEvent}
 
-/**
- * Used to let the frameHandler send back unwrapped Frames, which it
- * will wrap before putting into the pipeline
- */
-class ReceiverProxy(pcontext: PipelineContext) extends Actor{
-  def receive = {
-    case f: SocketServer.Frame => pcontext.self ! FrameCommand(f)
-    case x: SocketServer.Close => pcontext.self ! IOConnection.Close(CleanClose)
-  }
-}
+
 
 /**
  * This pipeline stage simply forwards the events to and receives commands from
@@ -63,6 +50,18 @@ class ReceiverProxy(pcontext: PipelineContext) extends Actor{
  * @param handler the actor which will receive the incoming Frames
  */
 case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
+
+  /**
+   * Used to let the frameHandler send back unwrapped Frames, which it
+   * will wrap before putting into the pipeline
+   */
+  class ReceiverProxy(pcontext: PipelineContext) extends Actor{
+    def receive = {
+      case f: SocketServer.Frame => pcontext.self ! FrameCommand(f)
+      case x: SocketServer.Close => pcontext.self ! IOConnection.Close(CleanClose)
+    }
+  }
+
   def apply(pcontext: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines{
 
@@ -138,6 +137,8 @@ case class AutoPingPongs(pingInterval: Duration,
  * - Responding to Closed()
  * - Closes the connection if a frames is malformed
  *
+ * This only handles the stuff the spec says a server *must* handle. Everything
+ * else should go on the phases on top of this.
  */
 case class Consolidation(maxMessageLength: Long) extends PipelineStage{
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
