@@ -94,5 +94,44 @@ object SocketServer{
       headers = socketAcceptHeaders(calculateReturnHash(x.headers).get)
     )
   }
+
+
+  // The messages which are unique to a SocketServer
+
+  /**
+   * Tells the SocketServer to take this HTTP connection and swap it
+   * out into a websocket connection.
+   *
+   * @param data a piece of data that can be given to the SocketServer
+   *             when telling it to upgrade. This will be used by the
+   *             SocketServer's frameHandler to create/find an actor
+   *             that will handle the subsequent websocket frames
+   */
+  case class Upgrade(data: Any) extends Command
+
+  /**
+   * Sent by the SocketServer to the frameHandler when a websocket handshake
+   * is complete and the connection upgraded
+   */
+  case object Connected extends Event
+
+  /**
+   * The SocketServer exchanges websocket Frames with the frameHandler
+   */
+  val Frame = model.Frame; type Frame = model.Frame
+
+  /**
+   * This can be sent from the frameHandler to the SocketServer to close
+   * the websocket TCP connection. Note that if you want to send a proper
+   * "close" frame, to follow the websocket protocol, you need to do that
+   * separately (before closing the TCP connection)
+   */
+  val Close = IOConnection.Close; type Close = IOConnection.Close
+
+  /**
+   * The SocketServer will send this to the frameHandler when the TCP connection
+   * is closed
+   */
+  val Closed = IOConnection.Closed; type Closed = IOConnection.Closed
 }
 

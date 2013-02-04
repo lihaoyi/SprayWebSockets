@@ -46,6 +46,7 @@ object Frame{
         in.getLong
       case x => x
     }
+
     val maskingKey = if (mask != 0) Some(in.getInt) else None
 
     if (payloadLength > maxMessageLength) {
@@ -58,17 +59,12 @@ object Frame{
       val data = new Array[Byte](payloadLength.toInt)
       in.get(data)
 
-      for{
-        m <- maskingKey
-        i <- 0 until data.length
-      }{
-        val j = 3 - i % 4
-        data(i) = (data(i) ^ (m >> (8 * j)) & 0xff).toByte
-      }
+      for(m <- maskingKey) maskArray(data, m)
 
       Frame(FIN, RSV, opcode, maskingKey, ByteString(data))
     }
   }
+
   def write(f: Frame): Array[Byte] = {
     import f._
     val byteOutStream = new ByteArrayOutputStream()
@@ -84,7 +80,7 @@ object Frame{
     val b1 = (maskingKey.isDefined.b << 7) | (
       data.length match {
         case x if x <= 125 => x
-        case x if x < (2 << 16) => 126
+        case x if x < (1 << 16) => 126
         case x => 127
       }
     )
@@ -102,15 +98,21 @@ object Frame{
     }
 
     val array = data.toArray
-    for{
-      m <- maskingKey
-      i <- 0 until data.length
-    }{
-      val j = 3 - i % 4
-      array(i) = (array(i) ^ (m >> (8 * j)) & 0xff).toByte
-    }
+    for(m <- maskingKey) maskArray(array, m)
     out.write(array)
     byteOutStream.toByteArray
+  }
+
+  /**
+   * Mutates the given byte array by XORing it with the given Int mask
+   */
+  def maskArray(array: Array[Byte], mask: Int) = {
+    var i = 0
+    while (i < array.length){
+      val j = 3 - i % 4
+      array(i) = (array(i) ^ (mask >> (8 * j)) & 0xff).toByte
+      i += 1
+    }
   }
 }
 

@@ -10,11 +10,12 @@ import spray.io.IOConnection.{Close, Tell}
 import akka.util.ByteString
 import akka.actor.{Props, Actor, ActorRef}
 import spray.util.ConnectionCloseReasons.CleanClose
+import websockets.SocketServer.{Upgrade, Connected}
 
 /**
  * Stores handy socket pipeline related stuff
  */
-object Closing{
+object SocketPhases{
   /**
    * Cleanly closes the websocket pipeline
    *
@@ -30,7 +31,26 @@ object Closing{
     commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(Frame(opcode = ConnectionClose, data = closeCodeData)))))
     commandPL(IOConnection.Close(spray.util.ConnectionCloseReasons.ProtocolError(message)))
   }
+  /**
+   * Wraps a frame in an Event going up the pipeline
+   */
+  case class FrameEvent(f: Frame) extends Event
+
+  /**
+   * Wraps a frame in a Command going down the pipeline
+   */
+  case class FrameCommand(frame: Frame) extends Command
 }
+import SocketPhases.{FrameCommand,FrameEvent}
+
+
+class ReceiverProxy(pcontext: PipelineContext) extends Actor{
+  def receive = {
+    case f: SocketServer.Frame => pcontext.self ! FrameCommand(f)
+    case x: SocketServer.Close => pcontext.self ! IOConnection.Close(CleanClose)
+  }
+}
+
 /**
  * This pipeline stage simply forwards the events to and receives commands from
  * the given MessageHandler. It is the final stage of the websocket pipeline,
@@ -44,12 +64,7 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
       // This actor lets the `handler` reply with naked Frames, and it
       // will wrap them in FrameCommands before pushing them through
       // the pipeline
-      val receiveAdapter = pcontext.connectionActorContext.actorOf(Props(new Actor{
-        def receive = {
-          case f: Frame =>  pcontext.self ! FrameCommand(f)
-          case x: Close =>         pcontext.self ! IOConnection.Close(CleanClose)
-        }
-      }))
+      val receiveAdapter = pcontext.connectionActorContext.actorOf(Props(new ReceiverProxy(pcontext)))
 
       val commandPipeline: CPL = {
         case f => commandPL(f)
@@ -57,9 +72,8 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
 
       val eventPipeline: EPL = {
         case f @ FrameEvent(e) => commandPL(Tell(handler, e, receiveAdapter))
-        case c: IOBridge.Closed => commandPL(Tell(handler, c, receiveAdapter))
-        case WebsocketConnected =>
-          commandPL(Tell(handler, WebsocketConnected, receiveAdapter))
+        case c: SocketServer.Closed => commandPL(Tell(handler, c, receiveAdapter))
+        case SocketServer.Connected => commandPL(Tell(handler, Connected, receiveAdapter))
       }
     }
 }
@@ -70,7 +84,7 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
  * - Consolidating fragmented packets
  * - Responding to Pings
  * - Responding to Closed()
- * - Closing the connection if a frames is malformed
+ * - SocketPhases the connection if a frames is malformed
  *
  */
 case class Consolidation(maxMessageLength: Long) extends PipelineStage{
@@ -83,7 +97,7 @@ case class Consolidation(maxMessageLength: Long) extends PipelineStage{
 
       val eventPipeline: EPL = {
         case FrameEvent(f @ Frame(_, _, _, None, _)) =>
-          Closing.close(commandPL, CloseCode.ProtocolError.statusCode, "Client-Server frames must be masked")
+          SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Client-Server frames must be masked")
 
         case FrameEvent(f @ Frame(true, _, ConnectionClose, _, _)) =>
           val newF = f.copy(maskingKey = None)
@@ -99,14 +113,14 @@ case class Consolidation(maxMessageLength: Long) extends PipelineStage{
 
         case FrameEvent(f @ Frame(true, _, _, _, _)) =>
           if (stored.map(_.data.length).getOrElse(0) + f.data.length > maxMessageLength){
-            Closing.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
+            SocketPhases.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
           }else{
             stored = Some(stored.fold(f)(x => x.copy(data = x.data ++ f.data)))
             eventPL(FrameEvent(stored.get.copy(data = stored.get.data.compact)))
             stored = None
           }
 
-        case WebsocketConnected => eventPL(WebsocketConnected)
+        case Connected => eventPL(Connected)
 
         case msg =>
           eventPL(msg)
@@ -144,12 +158,12 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
               case Incomplete =>
                 false
               case TooLarge =>
-                Closing.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
+                SocketPhases.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
                 false
             }
           ){}
           streamBuffer = ByteString(buffer)
-        case WebsocketConnected => eventPL(WebsocketConnected)
+        case Connected => eventPL(Connected)
         case Tick => () // ignore Ticks, do not propagate
         case x => eventPL(x)
       }
@@ -180,7 +194,7 @@ case class Switching(stage1: PipelineStage, stage2: Any => PipelineStage) extend
           val pl2 = stage2(msg)(context, commandPL, eventPL)
           eventPLVar = pl2.eventPipeline
           commandPLVar = pl2.commandPipeline
-          eventPLVar(WebsocketConnected)
+          eventPLVar(Connected)
         case c => commandPLVar(c)
       }
       def eventPipeline: EPL = {

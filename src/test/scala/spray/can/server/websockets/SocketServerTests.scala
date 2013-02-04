@@ -2,7 +2,6 @@ package spray.can.server.websockets
 
 import model._
 import model.Frame.Successful
-import model.Frame.Successful
 import model.OpCode.{ConnectionClose, Text}
 import org.scalatest.FreeSpec
 import akka.actor._
@@ -13,21 +12,16 @@ import concurrent.Await
 import akka.util.{ByteString, Timeout}
 import java.nio.ByteBuffer
 import spray.http.HttpRequest
-import spray.io.SingletonHandler
-import scala.Some
-import spray.io.IOBridge.Received
 import akka.testkit.TestActorRef
 import org.scalatest.concurrent.Eventually
 import spray.can.server.ServerSettings
 import spray.io.IOClientConnection.DefaultPipelineStage
 import javax.net.ssl.{TrustManagerFactory, KeyManagerFactory, SSLContext}
 import java.security.{SecureRandom, KeyStore}
-import spray.io.IOConnection.Tell
 import spray.io.SingletonHandler
 import scala.Some
-import spray.can.server.websockets.Upgrade
+
 import spray.io.IOBridge.Received
-import spray.util.ConnectionCloseReasons.CleanClose
 
 class SocketServerTests extends FreeSpec with Eventually{
   implicit def byteArrayToBuffer(array: Array[Byte]) = ByteString(array)
@@ -94,7 +88,7 @@ class SocketServerTests extends FreeSpec with Eventually{
     def receive = {
       case req: HttpRequest =>
         sender ! SocketServer.acceptAllFunction(req)
-        sender ! Upgrade(1)
+        sender ! SocketServer.Upgrade(1)
       case x =>
         println(x)
     }
@@ -157,8 +151,8 @@ class SocketServerTests extends FreeSpec with Eventually{
         def receive = {
           case req: HttpRequest =>
             sender ! SocketServer.acceptAllFunction(req)
-            sender ! Upgrade(1)
-          case WebsocketConnected =>
+            sender ! SocketServer.Upgrade(1)
+          case SocketServer.Connected =>
             val closeCodeData = ByteString(
               ByteBuffer.allocate(2)
                 .putShort(1002)
