@@ -33,7 +33,7 @@ class SocketServer(httpHandler: MessageHandler,
                    settings: ServerSettings = ServerSettings(),
                    frameSizeLimit: Long = 1024 * 1024,
                    autoPingInterval: Duration = 1 second,
-                   tickGenerator: () => Array[Byte] = {() => val a = new Array[Byte](128); Random.nextBytes(a); a})
+                   tickGenerator: () => Array[Byte] = {() => val a = new Array[Byte](125); Random.nextBytes(a); a})
                   (implicit sslEngineProvider: ServerSSLEngineProvider)
                    extends HttpServer(httpHandler, settings) {
 

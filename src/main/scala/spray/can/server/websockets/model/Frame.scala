@@ -37,7 +37,7 @@ object Frame{
           in.reset()
           return Incomplete
         }
-        in.getShort
+        in.getShort & 0xffff
       case 127 =>
         if (in.remaining() < 4) {
           in.reset()
@@ -46,7 +46,6 @@ object Frame{
         in.getLong
       case x => x
     }
-
     val maskingKey = if (mask != 0) Some(in.getInt) else None
 
     if (payloadLength > maxMessageLength) {
@@ -86,11 +85,10 @@ object Frame{
     )
 
     out.writeByte(b1)
-
-    data.length match {
+    (b1 & 127) match {
       case x if x <= 125 => ()
-      case x if x < (2 << 16) => out.writeShort(data.length)
-      case x => out.writeLong(data.length)
+      case 126 => out.writeShort(data.length)
+      case 127 => out.writeLong(data.length)
     }
 
     for (m <- maskingKey){

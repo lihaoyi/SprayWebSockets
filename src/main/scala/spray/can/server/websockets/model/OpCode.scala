@@ -1,6 +1,6 @@
 package spray.can.server.websockets.model
 
-class OpCode(val value: Byte)
+class OpCode(val value: Byte, val isControl: Boolean)
 /**
  * All the opcodes a frame can have, defined in the spec
  *
@@ -15,12 +15,15 @@ object OpCode{
     case 9 => Ping
     case 10 => Pong
   }
-  object Continuation extends OpCode(0)
-  object Text extends OpCode(1)
-  object Binary extends OpCode(2)
-  object ConnectionClose extends OpCode(8)
-  object Ping extends OpCode(9)
-  object Pong extends OpCode(10)
+
+  object Continuation extends OpCode(0, false)
+  object Text extends OpCode(1, false)
+  object Binary extends OpCode(2, false)
+  object ConnectionClose extends OpCode(8, true)
+  object Ping extends OpCode(9, true)
+  object Pong extends OpCode(10, true)
+
+  val valid = List(Continuation, Text, Binary, ConnectionClose, Ping, Pong)
 }
 
 

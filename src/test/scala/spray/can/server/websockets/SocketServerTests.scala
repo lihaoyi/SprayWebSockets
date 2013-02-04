@@ -158,7 +158,6 @@ class SocketServerTests extends FreeSpec with Eventually{
               autoPingInterval: Duration = 5 seconds,
               settings: ServerSettings = ServerSettings())
              (test: ActorRef => Unit) = {
-    println("DoTwice " + autoPingInterval)
     "basic" in test(setupConnection(port, serverActor, maxMessageLength, autoPingInterval, settings))
     "ssl" in test(setupConnection(port + 1, serverActor, maxMessageLength, autoPingInterval, new ServerSettings{
       override val SSLEncryption = true
