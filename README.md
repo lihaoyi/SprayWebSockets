@@ -6,6 +6,10 @@ This is a implementation of a websocket server for the spray.io web toolkit. It 
 Getting Started
 ---------------
 
+The basic workflow for taking an existing HttpServer application and making it support websockets is:
+
+### Substitute the SocketServer in place of an existing HttpServer (with a dummy (x: Any) => null frameHandler) and everything should keep working
+
 The main class of interest is the [SocketServer](https://github.com/lihaoyi/SprayWebSockets/blob/master/src/main/scala/spray/can/server/websockets/SocketServer.scala):
 
 ```scala
@@ -28,14 +32,10 @@ The additional arguments are:
 - `autoPingInterval`: How often the server should send keep-alive pings
 - `tickGenerator`: How the server should decide what to put in the body of those pings. Defaults to just a bunch of random bytes.
 
-Protocol
---------
 
-Using websockets comprises two phases: the Handshake and the Connection
+### Decide how you want to handle the websocket handshakes 
 
-**Handshake**
-
-A websocket handshake is similar to an exchange of HttpRequest/Response, and the SocketServer re-uses all the existing http infrastructure to handle it. When a websocket request comes in, your MessageHandler will receive a HttpRequest which looks like
+A websocket handshake is similar to an exchange of HttpRequest/Response, and the SocketServer re-uses all the existing http infrastructure to handle it. When a websocket request comes in, your `MessageHandler` will receive a `HttpRequest` which looks like
 
 ```
 GET /mychat HTTP/1.1
@@ -49,7 +49,7 @@ Origin: http://example.com
 Server response:
 ```
 
-This is the client half of the websocket handshake. If you want to accept it and upgrade into a websocket connection, you reply with a HttpResponse which looks like
+This is the client half of the websocket handshake, which your `MessageHandler` will receive as a `HttpRequest`. If you want to accept it and upgrade into a websocket connection, you must reply with a `HttpResponse` which looks like
 
 ```
 HTTP/1.1 101 Switching Protocols
@@ -59,19 +59,15 @@ Sec-WebSocket-Accept: HSmrc0sMlYUkAGmm5OPpG2HaGWk=
 Sec-WebSocket-Protocol: chat
 ```
 
-So far all this stuff is just normal usage of the HttpServer; you take apart the HttpRequest and put together the HttpResponse as you would normally. 
+So far all this stuff is just normal usage of the `HttpServer`. This logic lives in your `MessageHandle`r actor's `receive()` method with the rest of your http handling stuff, and you can ignore/reject the request too if you don't want to handle it.
 
-The next step would be to upgrade the connection on the server side. This is done by sending an `Upgrade(data: Any)` message after sending the HttpResponse above. The SocketServer will swap out the http-related pipeline with a websocket pipeline, and feed the `data` value into your provided `frameHandler` in order to find/create an actor to handle the websocket connection.
+When you're done with the handshake, you must reply with an `SocketServer.Upgrade(data: Any)` message so the server can shift that connection into websocket-mode. The SocketServer will swap out the http-related pipeline with a websocket pipeline, and feed the `data` value into your provided `frameHandler` in order to find/create an actor to handle the websocket connection.
 
+###Define a proper frameHandler 
 
-The basic workflow for taking an existing HttpServer application and making it support websockets is:
+The `frameHandler` takes the `data` from the `SocketServer.Upgrade` message and find/create an actor (let's call him the *Frame Handler*) to handle the frames from that connection.
 
-- Substitute the SocketServer in place of an existing HttpServer (with a dummy (x: Any) => null frameHandler) and everything should keep working
-- Decide how you want to handle the websocket handshakes (they're treated as normal HttpRequests, and the server's handshake-response just a normal HttpResponse you send back). This logic  lives in your MessageHandler actor's receive() method with the rest of your http handling stuff, and you can ignore/reject the request too if you don't want to handle it.
-When you're done with the handshake, reply with an `SocketServer.Upgrade(data: Any)` message so the server can shift that connection into websocket-mode
-Define a proper frameHandler to take the `data` from the `SocketServer.Upgrade` message and find/create an actor (let's call him A) to handle the frames from that connection.
-
-The actor A will then be sent a `SocketServer.Connected` message. The connection is now open, and A can now:
+The *Frame Handler* will then be sent a `SocketServer.Connected` message. The connection is now open, and the *Frame Handler* can now:
 
 - Send `model.Frame` messages
 - Receive `model.Frame` messages
@@ -88,12 +84,14 @@ case class Frame(FIN: Boolean = true,
 
 and represents a single websocket frame.
 
-In order to close the connection, A should send a frame with `opcode = OpCode.ConnectionClose` to comply with the websocket protocol, before sending a `SocketServer.Close` message to actually terminate the TCP connection. A will then receive a `SocketServer.Closed` message. If the client initiates a close (whether cleanly via a `ConnectionClose` frame, or by abruptly cutting off the TCP connection) A will just receive the `SocketServer.Closed` message directly.
+###Close the Connection
 
-All the messages that the `frameHandler` can expect to send/receive from the `SocketServer` are documented in the `SocketServer` [companion object](https://github.com/lihaoyi/SprayWebSockets/blob/master/src/main/scala/spray/can/server/websockets/SocketServer.scala#L102-L140).
+In order to close the connection, the *Frame Handler* should send a frame with `opcode = OpCode.ConnectionClose` to comply with the websocket protocol, before sending a `SocketServer.Close` message to actually terminate the TCP connection. The *Frame Handler* will then receive a `SocketServer.Closed` message. If the client initiates a close (whether cleanly via a `ConnectionClose` frame, or by abruptly cutting off the TCP connection) the *Frame Handler* will just receive the `SocketServer.Closed` message directly.
 
 More Stuff
 ----------
+
+All the messages that the *Frame Handler* can expect to send/receive from the `SocketServer` are documented in the `SocketServer` [companion object](https://github.com/lihaoyi/SprayWebSockets/blob/master/src/main/scala/spray/can/server/websockets/SocketServer.scala#L102-L140).
 
 The server also can
 
