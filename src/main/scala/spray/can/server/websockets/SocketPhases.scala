@@ -76,30 +76,56 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
         case f @ FrameEvent(e) => commandPL(Tell(handler, e, receiveAdapter))
         case c: SocketServer.Closed => commandPL(Tell(handler, c, receiveAdapter))
         case SocketServer.Connected => commandPL(Tell(handler, Connected, receiveAdapter))
+        case rtt: SocketServer.RoundTripTime => commandPL(Tell(handler, rtt, receiveAdapter))
         case x => // ignore all other events, e.g. Ticks
       }
     }
 }
 
-case class Fanciest(tickInterval: Duration,
-                    tickGenerator: () => Array[Byte]) extends PipelineStage{
+/**
+ * This phase automatically performs the pings and matches up the resultant Pongs,
+ */
+case class AutoPingPongs(pingInterval: Duration,
+                         pingGenerator: () => Array[Byte]) extends PipelineStage{
+
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
+      var ticksInFlight = List[(ByteString, Deadline)]()
       var lastTick: Deadline = Deadline.now
+
       val commandPipeline: CPL = {
+        case fc @ FrameCommand(f @ Frame(true, _, Ping, _, data)) =>
+          lastTick = Deadline.now
+          ticksInFlight = (data -> lastTick) :: ticksInFlight
+          commandPL(fc)
         case x => commandPL(x)
       }
+
       val eventPipeline: EPL = {
         case Tick =>
-          tickInterval match{
-            case f: FiniteDuration if (Deadline.now - lastTick) > tickInterval =>
+          pingInterval match{
+            case f: FiniteDuration if (Deadline.now - lastTick) > pingInterval =>
+
+              val byteString = ByteString(pingGenerator())
               lastTick = Deadline.now
+              ticksInFlight = (byteString -> lastTick) :: ticksInFlight
               commandPipeline(FrameCommand(Frame(
                 opcode = OpCode.Ping,
-                data = ByteString(tickGenerator())
+                data = byteString
               )))
             case _ =>
           }
+
+        case fe @ FrameEvent(f @ Frame(true, _, Pong, _, data)) =>
+          val found = ticksInFlight.find(_._1 == data)
+
+          found.map(_._2).foreach{ timestamp =>
+            ticksInFlight = ticksInFlight.filter(_._2 > timestamp)
+            eventPL(SocketServer.RoundTripTime(Deadline.now - timestamp))
+          }
+
+          eventPL(fe)
+
         case x => eventPL(x)
       }
     }
@@ -110,7 +136,7 @@ case class Fanciest(tickInterval: Duration,
  * - Consolidating fragmented packets
  * - Responding to Pings
  * - Responding to Closed()
- * - SocketPhases the connection if a frames is malformed
+ * - Closes the connection if a frames is malformed
  *
  */
 case class Consolidation(maxMessageLength: Long) extends PipelineStage{

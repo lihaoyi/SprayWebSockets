@@ -54,7 +54,7 @@ class SocketServer(httpHandler: MessageHandler,
       ConnectionTimeouts(IdleTimeout) ? (ReapingCycle > 0 && IdleTimeout > 0),
       (upgradeMsg: Any) =>
         WebsocketFrontEnd(frameHandler(upgradeMsg)) >>
-        Fanciest(autoPingInterval, tickGenerator) >>
+        AutoPingPongs(autoPingInterval, tickGenerator) >>
         Consolidation(frameSizeLimit) >>
         FrameParsing(frameSizeLimit)
     ) >>
@@ -75,7 +75,6 @@ object SocketServer{
             frameSizeLimit: Long = 1024 * 1024,
             autoPingInterval: Duration = 1 second)
            (implicit sslEngineProvider: ServerSSLEngineProvider): SocketServer = {
-    println("SocketServer " + autoPingInterval)
     new SocketServer(acceptHandler,  frameHandler, settings, frameSizeLimit, autoPingInterval)
   }
 
@@ -101,6 +100,13 @@ object SocketServer{
 
 
   // The messages which are unique to a SocketServer
+
+  /**
+   * Sent by the SocketServer whenever an incoming Pong matches an
+   * outgoing Ping, providing the FrameHandler with the round-trip
+   * latency of that ping-pong.
+   */
+  case class RoundTripTime(delta: FiniteDuration) extends Event
 
   /**
    * Tells the SocketServer to take this HTTP connection and swap it

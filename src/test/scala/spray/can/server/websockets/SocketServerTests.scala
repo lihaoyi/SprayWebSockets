@@ -24,6 +24,7 @@ import scala.Some
 import spray.io.IOBridge.Received
 import spray.io.IOConnection.Tell
 import org.scalatest.time.{Seconds, Span}
+import spray.can.server.websockets.SocketServer.RoundTripTime
 
 class SocketServerTests extends FreeSpec with Eventually{
   implicit def byteArrayToBuffer(array: Array[Byte]) = ByteString(array)
@@ -99,7 +100,7 @@ class SocketServerTests extends FreeSpec with Eventually{
       case req: HttpRequest =>
         sender ! SocketServer.acceptAllFunction(req)
         sender ! SocketServer.Upgrade(1)
-      case x => println(x)
+      case x =>
     }
   }
 
@@ -122,12 +123,12 @@ class SocketServerTests extends FreeSpec with Eventually{
    */
   def setupConnection(port: Int = 1000 + util.Random.nextInt(10000),
                       serverActor: () => Actor = () => new AcceptActor,
+                      echoActor: => () => Actor = () => new EchoActor,
                       maxMessageLength: Long = Long.MaxValue,
                       autoPingInterval: Duration = 5 seconds,
                       settings: ServerSettings = ServerSettings()) = {
-    println("Setup " + autoPingInterval)
     val httpHandler = SingletonHandler(system.actorOf(Props(serverActor())))
-    val frameHandler = system.actorOf(Props(new EchoActor))
+    val frameHandler = system.actorOf(Props(echoActor()))
     val server = system.actorOf(Props(SocketServer(
       httpHandler,
       x => frameHandler,
@@ -154,12 +155,13 @@ class SocketServerTests extends FreeSpec with Eventually{
    */
   def doTwice(port: Int = 1000 + util.Random.nextInt(10000),
               serverActor: () => Actor = () => new AcceptActor,
+              echoActor: => () => Actor = () => new EchoActor,
               maxMessageLength: Long = Long.MaxValue,
               autoPingInterval: Duration = 5 seconds,
               settings: ServerSettings = ServerSettings())
              (test: ActorRef => Unit) = {
-    "basic" in test(setupConnection(port, serverActor, maxMessageLength, autoPingInterval, settings))
-    "ssl" in test(setupConnection(port + 1, serverActor, maxMessageLength, autoPingInterval, new ServerSettings{
+    "basic" in test(setupConnection(port, serverActor, echoActor, maxMessageLength, autoPingInterval, settings))
+    "ssl" in test(setupConnection(port + 1, serverActor, echoActor, maxMessageLength, autoPingInterval, new ServerSettings{
       override val SSLEncryption = true
     }))
   }
@@ -326,12 +328,49 @@ class SocketServerTests extends FreeSpec with Eventually{
         assert(res2.opcode === OpCode.Pong)
 
       }
-      "auto ping" - doTwice(autoPingInterval = 300 milliseconds){connection =>
+      "auto ping" - doTwice(autoPingInterval = 100 milliseconds){connection =>
         val res1 = connection await Tell(TestActorRef(new Actor{def receive = {case x =>}}), "lol", null)
         assert(res1.opcode === OpCode.Ping)
         val res2 = connection await Tell(TestActorRef(new Actor{def receive = {case x =>}}), "lol", null)
         assert(res2.opcode === OpCode.Ping)
+      }
 
+      class TimingEchoActor extends Actor{
+        var lastDuration = Duration.Zero
+
+        def receive = {
+          case f @ Frame(fin, rsv, Text, maskingKey, data) =>
+            sender ! Frame(fin, rsv, Text, None, lastDuration.toMillis.toString.getBytes)
+          case RoundTripTime(duration) =>
+            lastDuration = duration
+        }
+      }
+      "latency numbers" - doTwice(echoActor = () => new TimingEchoActor(), autoPingInterval = 100 milliseconds){connection =>
+        {
+          //initial latency should be 0
+          val res1 = connection await Frame(opcode = OpCode.Text, data = ByteString("hello ping"), maskingKey = Some(12345))
+          assert(res1.stringData === "0")
+
+          // wait for ping and send pong
+          val res2 = connection await Tell(TestActorRef(new Actor{def receive = {case x =>}}), "lol", null)
+          assert(res2.opcode === OpCode.Ping)
+          connection send Frame(opcode = OpCode.Pong, data = res2.data, maskingKey = Some(12345))
+
+          //new latency should be non zero
+          val res3 = connection await Frame(opcode = OpCode.Text, data = ByteString("hello ping"), maskingKey = Some(12345))
+          assert(res3.stringData.toLong > 0)
+        }
+        {
+          // wait for ping and send pong
+          val res2 = connection await Tell(TestActorRef(new Actor{def receive = {case x =>}}), "lol", null)
+          assert(res2.opcode === OpCode.Ping)
+          Thread.sleep(200)
+          connection send Frame(opcode = OpCode.Pong, data = res2.data, maskingKey = Some(12345))
+
+          //new latency should be non zero
+          val res3 = connection await Frame(opcode = OpCode.Text, data = ByteString("hello ping"), maskingKey = Some(12345))
+          assert(res3.stringData.toLong > 200)
+        }
       }
     }
   }

@@ -102,6 +102,7 @@ The server also can
 - Handle fragmented messages (the server will buffer up a complete message before passing it to your frameHandler
 - Cut off messages which are too big (whether single-messages or fragmented)
 - Automatically respond to pings with pongs
+- Match up outgoing Pings and incoming Pongs to find round trip times
 - Kill the connection when there's a protocol violation according to the websocket spec (probably doesn't account for everything at the moment)
 
 
