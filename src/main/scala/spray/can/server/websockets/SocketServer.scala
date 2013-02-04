@@ -54,7 +54,8 @@ class SocketServer(httpHandler: MessageHandler,
       ConnectionTimeouts(IdleTimeout) ? (ReapingCycle > 0 && IdleTimeout > 0),
       (upgradeMsg: Any) =>
         WebsocketFrontEnd(frameHandler(upgradeMsg)) >>
-        Consolidation(frameSizeLimit, autoPingInterval, tickGenerator) >>
+        Fanciest(autoPingInterval, tickGenerator) >>
+        Consolidation(frameSizeLimit) >>
         FrameParsing(frameSizeLimit)
     ) >>
     SslTlsSupport(sslEngineProvider) ? SSLEncryption >>

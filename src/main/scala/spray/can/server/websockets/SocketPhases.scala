@@ -81,6 +81,29 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
     }
 }
 
+case class Fanciest(tickInterval: Duration,
+                    tickGenerator: () => Array[Byte]) extends PipelineStage{
+  def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
+    new Pipelines {
+      var lastTick: Deadline = Deadline.now
+      val commandPipeline: CPL = {
+        case x => commandPL(x)
+      }
+      val eventPipeline: EPL = {
+        case Tick =>
+          tickInterval match{
+            case f: FiniteDuration if (Deadline.now - lastTick) > tickInterval =>
+              lastTick = Deadline.now
+              commandPipeline(FrameCommand(Frame(
+                opcode = OpCode.Ping,
+                data = ByteString(tickGenerator())
+              )))
+            case _ =>
+          }
+        case x => eventPL(x)
+      }
+    }
+}
 /**
  * Does the fancy websocket stuff, handling:
  *
@@ -90,9 +113,7 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
  * - SocketPhases the connection if a frames is malformed
  *
  */
-case class Consolidation(maxMessageLength: Long,
-                         tickInterval: Duration,
-                         tickGenerator: () => Array[Byte]) extends PipelineStage{
+case class Consolidation(maxMessageLength: Long) extends PipelineStage{
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
 
@@ -104,6 +125,7 @@ case class Consolidation(maxMessageLength: Long,
 
       val eventPipeline: EPL = {
         case FrameEvent(f @ Frame(_, _, _, None, _)) =>
+          // close connection on malformed frame
           SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Client-Server frames must be masked")
 
         case FrameEvent(f @ Frame(true, _, ConnectionClose, _, _)) =>
@@ -120,24 +142,13 @@ case class Consolidation(maxMessageLength: Long,
 
         case FrameEvent(f @ Frame(true, _, _, _, _)) =>
           if (stored.map(_.data.length).getOrElse(0) + f.data.length > maxMessageLength){
+            // close connection on oversized packet
             SocketPhases.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
           }else{
             stored = Some(stored.fold(f)(x => x.copy(data = x.data ++ f.data)))
             eventPL(FrameEvent(stored.get.copy(data = stored.get.data.compact)))
             stored = None
           }
-
-        case Tick =>
-          tickInterval match{
-            case f: FiniteDuration if (Deadline.now - lastTick) > tickInterval =>
-              lastTick = Deadline.now
-              commandPipeline(FrameCommand(Frame(
-                opcode = OpCode.Ping,
-                data = ByteString(tickGenerator())
-              )))
-            case _ =>
-          }
-
 
         case msg => eventPL(msg)
       }
