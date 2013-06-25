@@ -14,7 +14,8 @@ object Build extends sbt.Build{
 
       resolvers ++= Seq(
         "typesafe repo"      at "http://repo.typesafe.com/typesafe/releases/",
-        "spray nightly"      at "http://nightlies.spray.io/"
+        "spray nightly"      at "http://nightlies.spray.io/",
+        "spray repo"         at "http://repo.spray.io"
       ),
       libraryDependencies ++= Seq(
         "io.spray"                %   "spray-can"     % "1.1-20130129",
