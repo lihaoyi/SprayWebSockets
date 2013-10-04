@@ -152,26 +152,33 @@ case class Consolidation(maxMessageLength: Long) extends PipelineStage{
 
       val eventPipeline: EPL = {
         case FrameEvent(f @ Frame(_, _, _, None, _)) =>
+          println("A")
           // close connection on malformed frame
           SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Client-Server frames must be masked")
 
         case FrameEvent(f @ Frame(true, _, ConnectionClose, _, _)) =>
+          println("B")
           val newF = f.copy(maskingKey = None)
           commandPL(Tcp.Write(ByteString(Frame.write(newF))))
           commandPL(Tcp.Close)
 
         case FrameEvent(f @ Frame(true, _, Ping, _, _)) =>
+          println("C")
           val newF = f.copy(opcode = Pong, maskingKey = None)
           commandPL(Tcp.Write(ByteString(ByteBuffer.wrap(Frame.write(newF)))))
 
         case FrameEvent(f @ Frame(false, _, _, _, _)) =>
+          println("D")
           stored = Some(stored.fold(f)(x => x.copy(data = x.data ++ f.data)))
 
         case FrameEvent(f @ Frame(true, _, _, _, _)) =>
+
           if (stored.map(_.data.length).getOrElse(0) + f.data.length > maxMessageLength){
+            println("E1 " + f.data.length)
             // close connection on oversized packet
             SocketPhases.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
           }else{
+            println("E2 " + f.data.length)
             stored = Some(stored.fold(f)(x => x.copy(data = x.data ++ f.data)))
             eventPL(FrameEvent(stored.get.copy(data = stored.get.data.compact)))
             stored = None
@@ -202,7 +209,6 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
 
       val eventPipeline: EPL = {
         case Tcp.Received(data) =>
-          println("DATA RECEIVED")
           streamBuffer = streamBuffer ++ data
           val buffer = streamBuffer.asByteBuffer
           while(

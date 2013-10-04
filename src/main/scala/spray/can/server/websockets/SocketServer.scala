@@ -18,8 +18,6 @@ object SocketServer{
 
 
   def calculateReturnHash(headers: List[HttpHeader]) = {
-    println("calculateReturnHash")
-    println(headers)
     headers.collectFirst{
       case RawHeader("Sec-WebSocket-Key", value) => (value + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").getBytes("UTF-8")
     }.map(MessageDigest.getInstance("SHA-1").digest)

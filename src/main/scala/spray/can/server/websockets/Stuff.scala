@@ -62,7 +62,6 @@ class SocketManager(httpSettings: HttpExt#Settings) extends HttpManager(httpSett
       settingsGroupFor(ClientConnectionSettings(connect.settings)).forward(connect)
 
     case bind: Http.Bind ⇒
-      println("SocketManager Bind")
       val commander = sender
       listeners :+= context.watch {
         context.actorOf(
@@ -178,37 +177,31 @@ class SocketListener(bindCommander: ActorRef,
   override val pipelineStage = SocketListener.pipelineStage(settings, statsHolder)
   override def binding(unbindCommanders: Set[ActorRef] = Set.empty): Receive = {
     case _: Tcp.Bound if !unbindCommanders.isEmpty ⇒
-      println("A")
       bindCommander ! Http.CommandFailed(bind)
       context.setReceiveTimeout(settings.unbindTimeout)
       context.become(unbinding(unbindCommanders))
 
     case x: Tcp.Bound ⇒
-      println("B")
       bindCommander ! x
       context.setReceiveTimeout(Duration.Undefined)
       context.become(connected(sender))
 
     case Tcp.CommandFailed(_: Tcp.Bind) ⇒
-      println("C")
       bindCommander ! Http.CommandFailed(bind)
       unbindCommanders foreach (_ ! Http.Unbound)
       context.stop(self)
 
     case ReceiveTimeout ⇒
-      println("D")
       bindCommander ! Http.CommandFailed(bind)
       unbindCommanders foreach (_ ! Http.Unbound)
       context.stop(self)
 
     case Http.Unbind ⇒
-      println("E")
       context.become(binding(unbindCommanders + sender))
   }
   import bind._
   override def connected(tcpListener: ActorRef): Receive = {
     case Tcp.Connected(remoteAddress, localAddress) ⇒
-      println("F")
       val conn = sender
       context.actorOf(
         props = Props(new HttpServerConnection(conn, listener, pipelineStage, remoteAddress, localAddress, settings))
@@ -264,19 +257,14 @@ case class Switching(stage1: RawPipelineStage[SslTlsContext with ServerFrontend.
       // it is important to introduce the proxy to the var here
       def commandPipeline: CPL = {
         case upgrade: Sockets.Upgrade =>
-          println("Switching Response " + upgrade)
           val pl2 = stage2(upgrade)(context, commandPL, eventPL)
           eventPLVar = pl2.eventPipeline
           commandPLVar = pl2.commandPipeline
           eventPLVar(Connected)
-        case c =>
-          println("Switching CPL " + c)
-          commandPLVar(c)
+        case c => commandPLVar(c)
       }
       def eventPipeline: EPL = {
-        e =>
-          println("Switching EPL " + e)
-          eventPLVar(e)
+        e => eventPLVar(e)
       }
     }
 }
