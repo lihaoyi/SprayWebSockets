@@ -6,12 +6,13 @@ import OpCode._
 import spray.io._
 import java.nio.ByteBuffer
 import spray.io.TickGenerator.Tick
-import spray.io.IOConnection.{Close, Tell}
+
 import akka.util.ByteString
 import akka.actor.{Props, Actor, ActorRef}
-import spray.util.ConnectionCloseReasons.CleanClose
-import websockets.SocketServer.{Upgrade, Connected}
+
+import websockets.SocketServer.Connected
 import concurrent.duration.{FiniteDuration, Duration, Deadline}
+import akka.io.Tcp
 
 /**
  * Stores handy socket pipeline related stuff
@@ -25,8 +26,8 @@ object SocketPhases{
    */
   def close(commandPL : Pipeline[Command], closeCode: Short, message: String) = {
     val closeFrame = Frame(opcode = ConnectionClose, data = CloseCode.serializeCloseCode(closeCode))
-    commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(closeFrame))))
-    commandPL(IOConnection.Close(spray.util.ConnectionCloseReasons.ProtocolError(message)))
+    commandPL(Tcp.Write(ByteString(Frame.write(closeFrame))))
+    commandPL(Tcp.Close)
   }
   /**
    * Wraps a frame in an Event going up the pipeline
@@ -57,25 +58,25 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
    */
   class ReceiverProxy(pcontext: PipelineContext) extends Actor{
     def receive = {
-      case f: SocketServer.Frame => pcontext.self ! FrameCommand(f)
-      case x: SocketServer.Close => pcontext.self ! IOConnection.Close(CleanClose)
+      case f: SocketServer.Frame => pcontext.actorContext.self ! FrameCommand(f)
+      case Tcp.Close => pcontext.actorContext.self ! Tcp.Close
     }
   }
 
   def apply(pcontext: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines{
 
-      val receiveAdapter = pcontext.connectionActorContext.actorOf(Props(new ReceiverProxy(pcontext)))
+      val receiveAdapter = pcontext.actorContext.actorOf(Props(new ReceiverProxy(pcontext)))
 
       val commandPipeline: CPL = {
         case f => commandPL(f)
       }
 
       val eventPipeline: EPL = {
-        case f @ FrameEvent(e) => commandPL(Tell(handler, e, receiveAdapter))
-        case c: SocketServer.Closed => commandPL(Tell(handler, c, receiveAdapter))
-        case SocketServer.Connected => commandPL(Tell(handler, Connected, receiveAdapter))
-        case rtt: SocketServer.RoundTripTime => commandPL(Tell(handler, rtt, receiveAdapter))
+        case f @ FrameEvent(e) => commandPL(Pipeline.Tell(handler, e, receiveAdapter))
+        case Tcp.Closed => commandPL(Pipeline.Tell(handler, Tcp.Closed, receiveAdapter))
+        case SocketServer.Connected => commandPL(Pipeline.Tell(handler, Connected, receiveAdapter))
+        case rtt: SocketServer.RoundTripTime => commandPL(Pipeline.Tell(handler, rtt, receiveAdapter))
         case x => // ignore all other events, e.g. Ticks
       }
     }
@@ -157,12 +158,12 @@ case class Consolidation(maxMessageLength: Long) extends PipelineStage{
 
         case FrameEvent(f @ Frame(true, _, ConnectionClose, _, _)) =>
           val newF = f.copy(maskingKey = None)
-          commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(newF))))
-          commandPL(IOConnection.Close(spray.util.ConnectionCloseReasons.CleanClose))
+          commandPL(Tcp.Write(ByteString(Frame.write(newF))))
+          commandPL(Tcp.Close)
 
         case FrameEvent(f @ Frame(true, _, Ping, _, _)) =>
           val newF = f.copy(opcode = Pong, maskingKey = None)
-          commandPL(IOConnection.Send(ByteBuffer.wrap(Frame.write(newF))))
+          commandPL(Tcp.Write(ByteString(ByteBuffer.wrap(Frame.write(newF)))))
 
         case FrameEvent(f @ Frame(false, _, _, _, _)) =>
           stored = Some(stored.fold(f)(x => x.copy(data = x.data ++ f.data)))
@@ -194,15 +195,16 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
       var streamBuffer: ByteString = ByteString()
       val commandPipeline: CPL = {
         case f: FrameCommand =>
-          val buffer = ByteBuffer.wrap(Frame.write(f.frame))
-          commandPL(IOConnection.Send(buffer))
+          val bytes = ByteString(Frame.write(f.frame))
+          commandPL(Tcp.Write(bytes))
         case x =>
           commandPL(x)
       }
 
       val eventPipeline: EPL = {
-        case IOBridge.Received(connection, data) =>
-          streamBuffer = streamBuffer ++ ByteString(data)
+        case Tcp.Received(data) =>
+
+          streamBuffer = streamBuffer ++ data
           val buffer = streamBuffer.asByteBuffer
           while(
             model.Frame.read(buffer, maxMessageLength) match{
@@ -219,39 +221,6 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
           streamBuffer = ByteString(buffer)
 
         case x => eventPL(x)
-      }
-    }
-}
-
-/**
- * A stage that can become either of two pipelines. It starts off using stage1,
- * and when an Upgrade message is received, it'll combine the message with stage2
- * to create its new pipeline
- *
- * @param stage1 The first stage
- * @param stage2 a function which generates its second stage, based on the
- *               contents of the Upgrade
- */
-case class Switching(stage1: PipelineStage, stage2: Any => PipelineStage) extends PipelineStage {
-
-  def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
-    new Pipelines {
-      val pl1 = stage1(context, commandPL, eventPL)
-
-      var eventPLVar = pl1.eventPipeline
-      var commandPLVar = pl1.commandPipeline
-
-      // it is important to introduce the proxy to the var here
-      def commandPipeline: CPL = {
-        case Response(_, u @ Upgrade(msg)) =>
-          val pl2 = stage2(msg)(context, commandPL, eventPL)
-          eventPLVar = pl2.eventPipeline
-          commandPLVar = pl2.commandPipeline
-          eventPLVar(Connected)
-        case c => commandPLVar(c)
-      }
-      def eventPipeline: EPL = {
-        c => eventPLVar(c)
       }
     }
 }

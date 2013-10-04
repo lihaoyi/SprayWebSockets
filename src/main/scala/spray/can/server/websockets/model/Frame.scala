@@ -13,9 +13,6 @@ import spray.can.server.websockets.model.OpCode.{Ping, ConnectionClose}
  * Deals with serializing/deserializing Frames from Bytes
  */
 object Frame{
-
-
-
   /**
    * Mutates the given byte array by XORing it with the given Int mask
    */
