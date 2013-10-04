@@ -12,6 +12,7 @@ import spray.http.HttpRequest
 import akka.actor.Terminated
 import scala.concurrent.duration.Duration
 import spray.can.server.websockets.SocketServer.Connected
+import akka.io.Tcp
 
 object Sockets extends ExtensionKey[SocketExt]{
   case class Upgrade(frameHandler: ActorRef,
@@ -61,10 +62,11 @@ class SocketManager(httpSettings: HttpExt#Settings) extends HttpManager(httpSett
       settingsGroupFor(ClientConnectionSettings(connect.settings)).forward(connect)
 
     case bind: Http.Bind ⇒
+      println("SocketManager Bind")
       val commander = sender
       listeners :+= context.watch {
         context.actorOf(
-          props = Props(new HttpListener(commander, bind, httpSettings)) withDispatcher ListenerDispatcher,
+          props = Props(new SocketListener(commander, bind, httpSettings)) withDispatcher ListenerDispatcher,
           name = "listener-" + listenerCounter.next())
       }
 
@@ -174,6 +176,56 @@ class SocketListener(bindCommander: ActorRef,
                      httpSettings: HttpExt#Settings) extends HttpListener(bindCommander, bind, httpSettings){
 
   override val pipelineStage = SocketListener.pipelineStage(settings, statsHolder)
+  override def binding(unbindCommanders: Set[ActorRef] = Set.empty): Receive = {
+    case _: Tcp.Bound if !unbindCommanders.isEmpty ⇒
+      println("A")
+      bindCommander ! Http.CommandFailed(bind)
+      context.setReceiveTimeout(settings.unbindTimeout)
+      context.become(unbinding(unbindCommanders))
+
+    case x: Tcp.Bound ⇒
+      println("B")
+      bindCommander ! x
+      context.setReceiveTimeout(Duration.Undefined)
+      context.become(connected(sender))
+
+    case Tcp.CommandFailed(_: Tcp.Bind) ⇒
+      println("C")
+      bindCommander ! Http.CommandFailed(bind)
+      unbindCommanders foreach (_ ! Http.Unbound)
+      context.stop(self)
+
+    case ReceiveTimeout ⇒
+      println("D")
+      bindCommander ! Http.CommandFailed(bind)
+      unbindCommanders foreach (_ ! Http.Unbound)
+      context.stop(self)
+
+    case Http.Unbind ⇒
+      println("E")
+      context.become(binding(unbindCommanders + sender))
+  }
+  import bind._
+  override def connected(tcpListener: ActorRef): Receive = {
+    case Tcp.Connected(remoteAddress, localAddress) ⇒
+      println("F")
+      val conn = sender
+      context.actorOf(
+        props = Props(new HttpServerConnection(conn, listener, pipelineStage, remoteAddress, localAddress, settings))
+          .withDispatcher(httpSettings.ConnectionDispatcher),
+        name = connectionCounter.next().toString)
+
+    case Http.GetStats   ⇒ statsHolder foreach { holder ⇒ sender ! holder.toStats }
+    case Http.ClearStats ⇒ statsHolder foreach { _.clear() }
+
+    case Http.Unbind ⇒
+      tcpListener ! Tcp.Unbind
+      context.setReceiveTimeout(settings.unbindTimeout)
+      context.become(unbinding(Set(sender)))
+
+    case _: Http.ConnectionClosed ⇒
+    // ignore, we receive this event when the user didn't register the handler within the registration timeout period
+  }
 }
 object SocketListener{
 
@@ -199,20 +251,6 @@ object SocketListener{
       TickGenerator(reapingCycle) ? (reapingCycle.isFinite && (idleTimeout.isFinite || requestTimeout.isFinite))
   }
 
-  def pipelineStageOld(settings: ServerSettings, statsHolder: Option[StatsHolder]) = {
-    import settings._
-    ServerFrontend(settings) >>
-      RequestChunkAggregation(requestChunkAggregationLimit) ? (requestChunkAggregationLimit > 0) >>
-      PipeliningLimiter(pipeliningLimit) ? (pipeliningLimit > 0) >>
-      StatsSupport(statsHolder.get) ? statsSupport >>
-      RemoteAddressHeaderSupport ? remoteAddressHeader >>
-      RequestParsing(settings) >>
-      ResponseRendering(settings) >>
-      ConnectionTimeouts(idleTimeout) ? (reapingCycle.isFinite && idleTimeout.isFinite) >>
-      SslTlsSupport ? sslEncryption >>
-      TickGenerator(reapingCycle) ? (reapingCycle.isFinite && (idleTimeout.isFinite || requestTimeout.isFinite))
-  }
-
 }
 case class Switching(stage1: RawPipelineStage[SslTlsContext with ServerFrontend.Context], stage2: Sockets.Upgrade => RawPipelineStage[SslTlsContext with ServerFrontend.Context]) extends RawPipelineStage[SslTlsContext with ServerFrontend.Context] {
 
@@ -225,15 +263,20 @@ case class Switching(stage1: RawPipelineStage[SslTlsContext with ServerFrontend.
 
       // it is important to introduce the proxy to the var here
       def commandPipeline: CPL = {
-        case Response(_, upgrade: Sockets.Upgrade) =>
+        case upgrade: Sockets.Upgrade =>
+          println("Switching Response " + upgrade)
           val pl2 = stage2(upgrade)(context, commandPL, eventPL)
           eventPLVar = pl2.eventPipeline
           commandPLVar = pl2.commandPipeline
           eventPLVar(Connected)
-        case c => commandPLVar(c)
+        case c =>
+          println("Switching CPL " + c)
+          commandPLVar(c)
       }
       def eventPipeline: EPL = {
-        c => eventPLVar(c)
+        e =>
+          println("Switching EPL " + e)
+          eventPLVar(e)
       }
     }
 }

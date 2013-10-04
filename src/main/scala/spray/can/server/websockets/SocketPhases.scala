@@ -42,7 +42,6 @@ object SocketPhases{
 import SocketPhases.{FrameCommand,FrameEvent}
 
 
-
 /**
  * This pipeline stage simply forwards the events to and receives commands from
  * the given MessageHandler. It is the final stage of the websocket pipeline,
@@ -203,7 +202,7 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
 
       val eventPipeline: EPL = {
         case Tcp.Received(data) =>
-
+          println("DATA RECEIVED")
           streamBuffer = streamBuffer ++ data
           val buffer = streamBuffer.asByteBuffer
           while(

@@ -18,8 +18,10 @@ object SocketServer{
 
 
   def calculateReturnHash(headers: List[HttpHeader]) = {
+    println("calculateReturnHash")
+    println(headers)
     headers.collectFirst{
-      case RawHeader("sec-websocket-key", value) => (value + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").getBytes("UTF-8")
+      case RawHeader("Sec-WebSocket-Key", value) => (value + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").getBytes("UTF-8")
     }.map(MessageDigest.getInstance("SHA-1").digest)
       .map(new sun.misc.BASE64Encoder().encode)
   }
@@ -45,6 +47,17 @@ object SocketServer{
    * latency of that ping-pong.
    */
   case class RoundTripTime(delta: FiniteDuration) extends Event
+
+  /**
+   * Tells the SocketServer to take this HTTP connection and swap it
+   * out into a websocket connection.
+   *
+   * @param data a piece of data that can be given to the SocketServer
+   *             when telling it to upgrade. This will be used by the
+   *             SocketServer's frameHandler to create/find an actor
+   *             that will handle the subsequent websocket frames
+   */
+  case class Upgrade(data: Any) extends Command
 
   /**
    * Sent by the SocketServer to the frameHandler when a websocket handshake
