@@ -240,7 +240,7 @@ object SocketListener{
           Consolidation(upgrade.frameSizeLimit) >>
           FrameParsing(upgrade.frameSizeLimit)
     ) >>
-      SslTlsSupport ? sslEncryption >>
+      SslTlsSupport ? true >>
       TickGenerator(reapingCycle) ? (reapingCycle.isFinite && (idleTimeout.isFinite || requestTimeout.isFinite))
   }
 
