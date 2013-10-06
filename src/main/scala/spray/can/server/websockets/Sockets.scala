@@ -227,7 +227,7 @@ private[can] class SocketClientSettingsGroup(settings: ClientConnectionSettings,
   override val pipelineStage = SocketClientConnection.pipelineStage(settings)
 }
 object SocketClientConnection{
-  def pipelineStage(settings: ClientConnectionSettings) = {
+  def pipelineStage(settings: ClientConnectionSettings): RawPipelineStage[SslTlsContext] = {
     import settings._
     Switching(
       ClientFrontend(requestTimeout) >>
@@ -278,11 +278,11 @@ object SocketListener{
   }
 
 }
-case class Switching(stage1: RawPipelineStage[SslTlsContext with ServerFrontend.Context])
-                    (stage2: PartialFunction[Tcp.Command, RawPipelineStage[SslTlsContext with ServerFrontend.Context]])
-                    extends RawPipelineStage[SslTlsContext with ServerFrontend.Context] {
+case class Switching[T <: PipelineContext](stage1: RawPipelineStage[T])
+                       (stage2: PartialFunction[Tcp.Command, RawPipelineStage[T]])
+                        extends RawPipelineStage[T] {
 
-  def apply(context: SslTlsContext with ServerFrontend.Context, commandPL: CPL, eventPL: EPL): Pipelines =
+  def apply(context: T, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
       val pl1 = stage1(context, commandPL, eventPL)
 
