@@ -19,33 +19,44 @@ import java.security.{SecureRandom, KeyStore}
 import scala.Some
 
 import org.scalatest.time.{Seconds, Span}
-import akka.io.{SslTlsSupport, TcpPipelineHandler, Tcp, IO}
+import akka.io._
 import spray.can.Http
 import java.net.InetSocketAddress
 import akka.io.Tcp.{Register, Write, Connected}
 import spray.io.Pipeline.Tell
 import spray.can.server.websockets.SocketServer.RoundTripTime
+import akka.io.TcpPipelineHandler.WithinActorContext
+import spray.io.Pipeline.Tell
+import scala.Some
+import akka.io.SslTlsSupport
+import spray.can.server.websockets.SocketServer.RoundTripTime
+import akka.io.IO
+import spray.http.HttpRequest
+import spray.can.server.websockets.model.Frame.Successful
+import akka.io.Tcp.Connected
+import akka.io.Tcp.Register
+import spray.can.server.ServerSettings
 
 class SocketServerTests extends FreeSpec with Eventually{
   implicit def byteArrayToBytestring(array: Array[Byte]) = ByteString(array)
   implicit val system = ActorSystem()
   implicit val timeout = akka.util.Timeout(5 seconds)
 
-//  implicit val sslContext = createSslContext("/ssl-test-keystore.jks", "")
+  def createSslContext(keyStoreResource: String, password: String): SSLContext = {
+    val keyStore = KeyStore.getInstance("jks")
+    val res = getClass.getResourceAsStream(keyStoreResource)
+    require(res != null)
+    keyStore.load(res, password.toCharArray)
+    val keyManagerFactory = KeyManagerFactory.getInstance("SunX509")
+    keyManagerFactory.init(keyStore, password.toCharArray)
+    val trustManagerFactory = TrustManagerFactory.getInstance("SunX509")
+    trustManagerFactory.init(keyStore)
+    val context = SSLContext.getInstance("SSL")
+    context.init(keyManagerFactory.getKeyManagers, trustManagerFactory.getTrustManagers, new SecureRandom)
+    context
+  }
+  implicit val sslContext = createSslContext("/ssl-test-keystore.jks", "")
   def createSslEngine(remote: InetSocketAddress, keyStoreResource: String, password: String): SSLEngine = {
-    def createSslContext(keyStoreResource: String, password: String): SSLContext = {
-      val keyStore = KeyStore.getInstance("jks")
-      val res = getClass.getResourceAsStream(keyStoreResource)
-      require(res != null)
-      keyStore.load(res, password.toCharArray)
-      val keyManagerFactory = KeyManagerFactory.getInstance("SunX509")
-      keyManagerFactory.init(keyStore, password.toCharArray)
-      val trustManagerFactory = TrustManagerFactory.getInstance("SunX509")
-      trustManagerFactory.init(keyStore)
-      val context = SSLContext.getInstance("SSL")
-      context.init(keyManagerFactory.getKeyManagers, trustManagerFactory.getTrustManagers, new SecureRandom)
-      context
-    }
     val context = createSslContext(keyStoreResource, password)
     val engine = context.createSSLEngine(remote.getHostName, remote.getPort)
     engine.setUseClientMode(true)
@@ -84,7 +95,6 @@ class SocketServerTests extends FreeSpec with Eventually{
              .asInstanceOf[Successful]
              .frame
       }(PatienceConfig(Span(5, Seconds)))
-
     }
   }
 
@@ -101,6 +111,8 @@ class SocketServerTests extends FreeSpec with Eventually{
   class ServerActor(maxMessageSize: Int = Int.MaxValue, autoPingInterval: Duration = Duration.Inf, echoActor: => Actor = new EchoActor()) extends Actor{
     def receive = {
       case req: HttpRequest =>
+        println("Server Received")
+        println(req.toString)
         sender ! SocketServer.acceptAllFunction(req)
         sender ! Sockets.Upgrade(TestActorRef(echoActor), autoPingInterval, () => Array(), maxMessageSize)
 
@@ -123,14 +135,22 @@ class SocketServerTests extends FreeSpec with Eventually{
       case x =>
     }
   }
-  class TestClientActor extends Actor{
+  class TestClientActor(ssl: Boolean) extends Actor{
     @volatile var buffer = ByteString.empty
     var outbox = Seq[Tcp.Write]()
     var connection: ActorRef = _
+
+    var func: Tcp.Command => Any = null
     def receive = {
-      case Tcp.Received(data) =>
-        buffer = buffer ++ data
-        println("ReadingActor received")
+      case e: TcpPipelineHandler.Init[_, _, _]#Event =>
+        e.evt match{
+          case Tcp.Received(data) =>
+            buffer = buffer ++ data
+            println("Client received")
+            println(buffer)
+          case Tcp.Closed | Tcp.PeerClosed => ()
+        }
+
 
       case Connected(remote, local) =>
         // http://doc.akka.io/docs/akka/snapshot/scala/io-tcp.html
@@ -138,7 +158,13 @@ class SocketServerTests extends FreeSpec with Eventually{
         println("sslEngine! " + sslEngine)
         val init = TcpPipelineHandler.withLogger(
           this.context.system.log, // NoLogging,
-          new SslTlsSupport(sslEngine)
+          if (ssl) new SslTlsSupport(sslEngine)
+          else new akka.io.PipelineStage[TcpPipelineHandler.WithinActorContext, Tcp.Command, Tcp.Command, Tcp.Event, Tcp.Event]{
+            def apply(ctx: WithinActorContext)= new PipePair[Tcp.Command, Tcp.Command, Tcp.Event, Tcp.Event]{
+              def commandPipeline: (Tcp.Command) => Iterable[this.type#Result] = x => Seq(Right(x))
+              def eventPipeline: (Tcp.Event) => Iterable[this.type#Result] = x => Seq(Left(x))
+            }
+          }
         )
 
         val pipeline = TestActorRef(new TcpPipelineHandler(
@@ -149,21 +175,22 @@ class SocketServerTests extends FreeSpec with Eventually{
 
         sender ! Register(pipeline)
         connection = pipeline
+        func = init.Command
 
-        println("ReadingActor connected")
+        println("Client connected")
         for (out <- outbox){
           connection ! init.Command(out)
-          println("ReadingActor flush")
+          println("Client flush")
         }
 
         outbox = Nil
 
       case write: Tcp.Write =>
-        println("Writing")
+        println("Client Writing")
         if (connection == null)
           outbox = outbox ++ Seq(write)
         else
-          connection ! write
+          connection ! func(write)
 
       case x =>
         println("unknown! " + x)
@@ -173,12 +200,18 @@ class SocketServerTests extends FreeSpec with Eventually{
    * Sets up a SocketServer and a IOClientConnection talking to it.
    */
   def setupConnection(port: Int = 10000 + util.Random.nextInt(1000),
-                      serverActor: => Actor) = {
-    val reqHandler = TestActorRef(serverActor)
+                      serverActor: => Actor,
+                      ssl: Boolean) = {
+    val reqHandler = system.actorOf(Props(serverActor))
 
-    IO(Sockets) ! Http.Bind(reqHandler, "localhost", port)
+    IO(Sockets) ! Http.Bind(
+      reqHandler,
+      "localhost",
+      port,
+      settings=Some(ServerSettings(system).copy(sslEncryption = ssl))
+    )
 
-    val client = TestActorRef(new TestClientActor)
+    val client = TestActorRef(new TestClientActor(ssl = ssl))
     IO(Tcp).!(Tcp.Connect(new InetSocketAddress("localhost", port)))(client)
     client await Tcp.Write(ByteString(websocketClientHandshake.getBytes))
     client
@@ -190,15 +223,17 @@ class SocketServerTests extends FreeSpec with Eventually{
   def doTwice(serverActor: => Actor = new ServerActor(Int.MaxValue),
               port: Int = 1000 + util.Random.nextInt(10000))
              (test: TestActorRef[TestClientActor]   => Unit) = {
-    "basic" in test(setupConnection(port, serverActor))
+    "basic" in test(setupConnection(port, serverActor, ssl=false))
+    "ssl" in test(setupConnection(port + 1, serverActor, ssl=true))
   }
 
   "Echo Server Tests" - {
     "hello world with echo server" - doTwice(){ connection =>
       def frame = Frame(true, (false, false, false), OpCode.Text, Some(12345123), "i am cow".getBytes)
+      println("First Message")
       val r3 = connection await frame
       assert(r3.stringData === "I AM COW1")
-
+      println("Second Message")
       val r4 = connection await frame
       assert(r4.stringData === "I AM COW2")
     }

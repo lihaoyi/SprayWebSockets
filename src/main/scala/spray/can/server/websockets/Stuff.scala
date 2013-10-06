@@ -224,7 +224,6 @@ object SocketListener{
 
   def pipelineStage(settings: ServerSettings, statsHolder: Option[StatsHolder]) = {
     import settings._
-
     Switching(
       ServerFrontend(settings) >>
         RequestChunkAggregation(requestChunkAggregationLimit) ? (requestChunkAggregationLimit > 0) >>
@@ -240,7 +239,7 @@ object SocketListener{
           Consolidation(upgrade.frameSizeLimit) >>
           FrameParsing(upgrade.frameSizeLimit)
     ) >>
-      SslTlsSupport ? true >>
+      SslTlsSupport ? sslEncryption >>
       TickGenerator(reapingCycle) ? (reapingCycle.isFinite && (idleTimeout.isFinite || requestTimeout.isFinite))
   }
 
