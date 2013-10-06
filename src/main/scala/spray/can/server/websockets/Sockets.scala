@@ -229,50 +229,6 @@ class SocketListener(bindCommander: ActorRef,
                      httpSettings: HttpExt#Settings) extends HttpListener(bindCommander, bind, httpSettings){
 
   override val pipelineStage = SocketListener.pipelineStage(settings, statsHolder)
-  override def binding(unbindCommanders: Set[ActorRef] = Set.empty): Receive = {
-    case _: Tcp.Bound if !unbindCommanders.isEmpty ⇒
-      bindCommander ! Http.CommandFailed(bind)
-      context.setReceiveTimeout(settings.unbindTimeout)
-      context.become(unbinding(unbindCommanders))
-
-    case x: Tcp.Bound ⇒
-      bindCommander ! x
-      context.setReceiveTimeout(Duration.Undefined)
-      context.become(connected(sender))
-
-    case Tcp.CommandFailed(_: Tcp.Bind) ⇒
-      bindCommander ! Http.CommandFailed(bind)
-      unbindCommanders foreach (_ ! Http.Unbound)
-      context.stop(self)
-
-    case ReceiveTimeout ⇒
-      bindCommander ! Http.CommandFailed(bind)
-      unbindCommanders foreach (_ ! Http.Unbound)
-      context.stop(self)
-
-    case Http.Unbind ⇒
-      context.become(binding(unbindCommanders + sender))
-  }
-  import bind._
-  override def connected(tcpListener: ActorRef): Receive = {
-    case Tcp.Connected(remoteAddress, localAddress) ⇒
-      val conn = sender
-      context.actorOf(
-        props = Props(new HttpServerConnection(conn, listener, pipelineStage, remoteAddress, localAddress, settings))
-          .withDispatcher(httpSettings.ConnectionDispatcher),
-        name = connectionCounter.next().toString)
-
-    case Http.GetStats   ⇒ statsHolder foreach { holder ⇒ sender ! holder.toStats }
-    case Http.ClearStats ⇒ statsHolder foreach { _.clear() }
-
-    case Http.Unbind ⇒
-      tcpListener ! Tcp.Unbind
-      context.setReceiveTimeout(settings.unbindTimeout)
-      context.become(unbinding(Set(sender)))
-
-    case _: Http.ConnectionClosed ⇒
-    // ignore, we receive this event when the user didn't register the handler within the registration timeout period
-  }
 }
 object SocketListener{
 
