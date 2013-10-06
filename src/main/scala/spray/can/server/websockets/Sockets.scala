@@ -23,10 +23,7 @@ import akka.actor.Terminated
  * websocket capabilities
  */
 object Sockets extends ExtensionKey[SocketExt]{
-  case class Upgrade(frameHandler: ActorRef,
-                     autoPingInterval: Duration,
-                     pingGenerator: () => Array[Byte],
-                     frameSizeLimit: Int) extends Command
+
 
   /**
    * Sent by Sockets whenever an incoming Pong matches an

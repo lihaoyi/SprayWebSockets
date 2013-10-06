@@ -8,34 +8,54 @@ Getting Started
 
 The basic workflow for taking an existing `HttpServer` application and making it support websockets is:
 
-### Substitute the SocketServer in place of an existing HttpServer
+### Substitute Sockets in place of Http
 
-The main class of interest is the [SocketServer](https://github.com/lihaoyi/SprayWebSockets/blob/master/src/main/scala/spray/can/server/websockets/SocketServer.scala):
+The main class of interest is [Sockets](https://github.com/lihaoyi/SprayWebSockets/blob/master/src/main/scala/spray/can/server/websockets/Sockets.scala). Here's a full example of its use:
 
 ```scala
-class SocketServer(httpHandler: MessageHandler,
-                   frameHandler: Any => ActorRef,
-                   settings: ServerSettings = ServerSettings(),
-                   frameSizeLimit: Long = 1024 * 1024,
-                   autoPingInterval: Duration = 1 second,
-                   tickGenerator: () => Array[Byte] = {() => val a = new Array[Byte](128); Random.nextBytes(a); a})
-                  (implicit sslEngineProvider: ServerSSLEngineProvider)
-                   extends HttpServer(httpHandler, settings)
+implicit val system = ActorSystem()
+
+// Define the server that accepts http requests and upgrades them
+class Server extends Actor{
+  def receive = {
+    case req: HttpRequest =>
+      sender ! Sockets.acceptAllFunction(req)
+      sender ! Sockets.Upgrade(self)
+
+    case x: Connected =>
+      sender ! Register(self)
+
+    case f @ Frame(fin, rsv, Text, maskingKey, data) =>
+      sender ! Frame(fin, rsv, Text, None, ByteString(f.stringData.toUpperCase))
+  }
+}
+
+IO(Sockets) ! Http.Bind(TestActorRef(new Server), "localhost", 12345)
+
+// A crappy ad-hoc websocket client
+val client = TestActorRef(new Util.TestClientActor(ssl = false))
+
+IO(Tcp).!(Tcp.Connect(new InetSocketAddress("localhost", 12345)))(client)
+
+// Send the http-ish handshake
+client await Tcp.Write(ByteString(
+  "GET /mychat HTTP/1.1\r\n" +
+  "Host: server.example.com\r\n" +
+  "Upgrade: websocket\r\n" +
+  "Connection: Upgrade\r\n" +
+  "Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==\r\n\r\n"
+))
+
+// Send the websocket frame
+val res = client await Frame(true, (false, false, false), OpCode.Text, Some(12345123), ByteString("i am cow"))
+assert(res.data.decodeString("UTF-8") == "I AM COW") // capitalized response
 ```
 
-It is essentially an extended `HttpServer`. In fact it should be a drop-in replacement for a HttpServer: as long as you don't use any websocket functionality, its behavior should be identical. You can usea dummy `(x: Any) => null` `frameHandler` for now and everything should keep working.
-
-The additional arguments are:
-
-- `frameHandler`: A function that is used to find/create an actor to handle a websocket connection. More on this later
-- `frameSizeLimit`: the largest frames that the server will buffer up for you. Anything larger and it'll dump the data and close the connection with a message-to-big error
-- `autoPingInterval`: How often the server should send keep-alive pings
-- `tickGenerator`: How the server should decide what to put in the body of those pings. Defaults to just a bunch of random bytes.
-
+It is essentially an extended `Http` server. In fact it should be a drop-in replacement for a HttpServer: as long as you don't use any websocket functionality (i.e. never send `Upgrade` messages) the behavior should be identical.
 
 ### Decide how you want to handle the websocket handshakes 
 
-A websocket handshake is similar to an exchange of HttpRequest/Response, and the SocketServer re-uses all the existing http infrastructure to handle it. When a websocket request comes in, your `MessageHandler` will receive a `HttpRequest` which looks like
+A websocket handshake is similar to an exchange of HttpRequest/Response, and the `Sockets` server re-uses all the existing http infrastructure to handle it. When a websocket request comes in, the listener you gave to the `Bind` command will receive a message that looks like:
 
 ```
 GET /mychat HTTP/1.1
@@ -59,17 +79,24 @@ Sec-WebSocket-Accept: HSmrc0sMlYUkAGmm5OPpG2HaGWk=
 Sec-WebSocket-Protocol: chat
 ```
 
-So far all this stuff is just normal usage of the `HttpServer`. This logic lives in your `MessageHandle`r actor's `receive()` method with the rest of your http handling stuff, and you can ignore/reject the request too if you don't want to handle it.
+`Sockets.acceptAllFunction(req)` is a convenience function provided to handle the most common case where you just want to accept the message and upgrade the connection with the default reply.
 
-When you're done with the handshake, you must reply with an `SocketServer.Upgrade(data: Any)` message so the server can shift that connection into websocket-mode. The SocketServer will swap out the http-related pipeline with a websocket pipeline, and feed the `data` value into your provided `frameHandler` in order to find/create an actor to handle the websocket connection.
+So far all this stuff is just normal usage of the `Http` server. This logic lives in your actor's `receive` method with the rest of your http handling stuff, and you can ignore/reject the request too if you don't want to handle it.
 
-If you need help, look at the [AcceptActor](https://github.com/lihaoyi/SprayWebSockets/blob/master/src/test/scala/spray/can/server/websockets/SocketServerTests.scala#L97-L104) in the unit tests to see how it does it. It uses a bunch of convenience methods that you could use to do the tedious bits (e.g. calculating hashes)
+When you're done with the handshake, you must reply with an `Sockets.Upgrade` message so the server can shift that connection into websocket-mode. The `Sockets` server will swap out the http-related pipeline with a websocket pipeline. Upgrade is defined as:
+
+```scala
+case class Upgrade(frameHandler: ActorRef,
+                   autoPingInterval: Duration = Duration.Inf,
+                   pingGenerator: () => Array[Byte] = () => Array(),
+                   frameSizeLimit: Int = Int.MaxValue) extends Command
+```
+
+The `frameHandler` is the actor that will receive the websocket traffic. It can be the same one, as in the example above, or a different actor. The other parameters are optional and are mostly self-explanatory.
 
 ###Define a proper frameHandler 
 
-The `frameHandler` takes the `data` from the `SocketServer.Upgrade` message and find/create an actor (let's call him the *Frame Handler*) to handle the frames from that connection.
-
-The *Frame Handler* will then be sent a `SocketServer.Connected` message. The connection is now open, and the *Frame Handler* can now:
+The `frameHandler` will then be sent a `SocketServer.Connected` message. The connection is now open, and the `frameHandler` can now:
 
 - Send `model.Frame` messages
 - Receive `model.Frame` messages
@@ -84,22 +111,22 @@ case class Frame(FIN: Boolean = true,
                  data: ByteString = ByteString.empty)
 ```
 
-and represents a single websocket frame. Sending a `Frame` pipes it across the internet to whoever is on the other side, and any frames he pipes back will hit your *Frame Handler*'s `receive()` method. You've opened your first websocket connection! This is where the `SocketServer`'s job ends and your application can do whatever you want with the incoming `Frame`s.
+and represents a single websocket frame. Sending a `Frame` pipes it across the internet to whoever is on the other side, and any frames he pipes back will hit your `frameHandler`'s `receive` method. You've opened your first websocket connection! This is where the `Sockets` server's job ends and your application can send as many outgoing `Frame`s as it likes do whatever you want with the incoming `Frame`s.
 
 ###Close the Connection
 
-In order to close the connection, the *Frame Handler* should send a frame with `opcode = OpCode.ConnectionClose` to comply with the websocket protocol, before sending a `SocketServer.Close` message to actually terminate the TCP connection. The *Frame Handler* will then receive a `SocketServer.Closed` message. If the client initiates a close (whether cleanly via a `ConnectionClose` frame, or by abruptly cutting off the TCP connection) the *Frame Handler* will just receive the `SocketServer.Closed` message directly.
+In order to close the connection, the `frameHandler` should send a `Frame` with `opcode = OpCode.ConnectionClose` to comply with the websocket protocol, before sending a `SocketServer.Close` message to actually terminate the TCP connection. The *Frame Handler* will then receive a `SocketServer.Closed` message. If the client initiates a close (whether cleanly via a `ConnectionClose` frame, or by abruptly cutting off the TCP connection) the `frameHandler` will just receive the `SocketServer.Closed` message directly.
 
 More Stuff
 ----------
 
-All the messages that the *Frame Handler* can expect to send/receive from the `SocketServer` are documented in the `SocketServer` [companion object](https://github.com/lihaoyi/SprayWebSockets/blob/master/src/main/scala/spray/can/server/websockets/SocketServer.scala#L102-L140).
+All the messages that the `frameHandler` can expect to send/receive from the `Sockets` server are documented in the `Sockets` [companion object](https://github.com/lihaoyi/SprayWebSockets/blob/master/src/main/scala/spray/can/server/websockets/Sockets.scala).
 
 The server also can
 
-- Automatically ping every client according to the `autoPingInterval`, using the `tickGenerator` to generate the body of each ping
+- Automatically ping every client according to the `autoPingInterval`, using the `pingGenerator` to generate the body of each ping
 - Work under SSL (all the tests are done both in the clear and under SSL)
-- Handle fragmented messages (the server will buffer up a complete message before passing it to your frameHandler
+- Handle fragmented messages (the server will buffer up a complete message before passing it to your `frameHandler`
 - Cut off messages which are too big (whether single-messages or fragmented)
 - Automatically respond to pings with pongs
 - Match up outgoing Pings and incoming Pongs to find round trip times

@@ -37,66 +37,12 @@ import akka.io.Tcp.Connected
 import akka.io.Tcp.Register
 import spray.can.server.ServerSettings
 
-class SocketServerTests extends FreeSpec with Eventually{
-  implicit def byteArrayToBytestring(array: Array[Byte]) = ByteString(array)
+class SocketsTest extends FreeSpec with Eventually{
+  implicit def string2bytestring(s: String) = ByteString(s)
   implicit val system = ActorSystem()
   implicit val timeout = akka.util.Timeout(5 seconds)
 
-  def createSslContext(keyStoreResource: String, password: String): SSLContext = {
-    val keyStore = KeyStore.getInstance("jks")
-    val res = getClass.getResourceAsStream(keyStoreResource)
-    require(res != null)
-    keyStore.load(res, password.toCharArray)
-    val keyManagerFactory = KeyManagerFactory.getInstance("SunX509")
-    keyManagerFactory.init(keyStore, password.toCharArray)
-    val trustManagerFactory = TrustManagerFactory.getInstance("SunX509")
-    trustManagerFactory.init(keyStore)
-    val context = SSLContext.getInstance("SSL")
-    context.init(keyManagerFactory.getKeyManagers, trustManagerFactory.getTrustManagers, new SecureRandom)
-    context
-  }
-  implicit val sslContext = createSslContext("/ssl-test-keystore.jks", "")
-  def createSslEngine(remote: InetSocketAddress, keyStoreResource: String, password: String): SSLEngine = {
-    val context = createSslContext(keyStoreResource, password)
-    val engine = context.createSSLEngine(remote.getHostName, remote.getPort)
-    engine.setUseClientMode(true)
-    engine
-  }
-
-  /**
-   * Provides convenience methods on an ActorRef so you don't need to keep
-   * typing Await.result(..., 10 seconds) blah blah blah and other annoying things
-   */
-  implicit class blockActorRef(a: TestActorRef[TestClientActor]){
-
-    def send(b: Frame) = {
-      a ! Tcp.Write(Frame.write(b))
-    }
-
-    /**
-     * Sends a frame and waits for the reply, buffering up the incoming bytes
-     * (since they could come over a period of time) and trying to parse it
-     * into an entire frame
-     */
-    def await(b: Frame): Frame = {
-      await(Tcp.Write(Frame.write(b)))
-    }
-    /**
-     * Sends a frame and waits for the reply, buffering up the incoming bytes
-     * (since they could come over a period of time) and trying to parse it
-     * into an entire frame
-     */
-    def await(c: Command): Frame = {
-      a.underlyingActor.buffer = ByteString.empty
-
-      a ! c
-      eventually {
-        Frame.read(a.underlyingActor.buffer.asByteBuffer)
-             .asInstanceOf[Successful]
-             .frame
-      }(PatienceConfig(Span(5, Seconds)))
-    }
-  }
+  implicit val sslContext = Util.createSslContext("/ssl-test-keystore.jks", "")
 
   val websocketClientHandshake =
     "GET /mychat HTTP/1.1\r\n" +
@@ -111,14 +57,11 @@ class SocketServerTests extends FreeSpec with Eventually{
   class ServerActor(maxMessageSize: Int = Int.MaxValue, autoPingInterval: Duration = Duration.Inf, echoActor: => Actor = new EchoActor()) extends Actor{
     def receive = {
       case req: HttpRequest =>
-        println("Server Received")
-        println(req.toString)
         sender ! Sockets.acceptAllFunction(req)
         sender ! Sockets.Upgrade(TestActorRef(echoActor), autoPingInterval, () => Array(), maxMessageSize)
 
       case x: Connected =>
         sender ! Register(self)
-
     }
   }
 
@@ -131,71 +74,11 @@ class SocketServerTests extends FreeSpec with Eventually{
     def receive = {
       case f @ Frame(fin, rsv, Text, maskingKey, data) =>
         count = count + 1
-        sender ! Frame(fin, rsv, Text, None, (f.stringData.toUpperCase + count).getBytes)
+        sender ! Frame(fin, rsv, Text, None, (f.stringData.toUpperCase + count))
       case x =>
     }
   }
-  class TestClientActor(ssl: Boolean) extends Actor{
-    @volatile var buffer = ByteString.empty
-    var outbox = Seq[Tcp.Write]()
-    var connection: ActorRef = _
 
-    var func: Tcp.Command => Any = null
-    def receive = {
-      case e: TcpPipelineHandler.Init[_, _, _]#Event =>
-        e.evt match{
-          case Tcp.Received(data) =>
-            buffer = buffer ++ data
-            println("Client received")
-            println(buffer)
-          case Tcp.Closed | Tcp.PeerClosed => ()
-        }
-
-
-      case Connected(remote, local) =>
-        // http://doc.akka.io/docs/akka/snapshot/scala/io-tcp.html
-        val sslEngine = createSslEngine(remote, "/ssl-test-keystore.jks", "")
-        println("sslEngine! " + sslEngine)
-        val init = TcpPipelineHandler.withLogger(
-          this.context.system.log, // NoLogging,
-          if (ssl) new SslTlsSupport(sslEngine)
-          else new akka.io.PipelineStage[TcpPipelineHandler.WithinActorContext, Tcp.Command, Tcp.Command, Tcp.Event, Tcp.Event]{
-            def apply(ctx: WithinActorContext)= new PipePair[Tcp.Command, Tcp.Command, Tcp.Event, Tcp.Event]{
-              def commandPipeline: (Tcp.Command) => Iterable[this.type#Result] = x => Seq(Right(x))
-              def eventPipeline: (Tcp.Event) => Iterable[this.type#Result] = x => Seq(Left(x))
-            }
-          }
-        )
-
-        val pipeline = TestActorRef(new TcpPipelineHandler(
-          init,
-          sender,
-          self
-        ))
-
-        sender ! Register(pipeline)
-        connection = pipeline
-        func = init.Command
-
-        println("Client connected")
-        for (out <- outbox){
-          connection ! init.Command(out)
-          println("Client flush")
-        }
-
-        outbox = Nil
-
-      case write: Tcp.Write =>
-        println("Client Writing")
-        if (connection == null)
-          outbox = outbox ++ Seq(write)
-        else
-          connection ! func(write)
-
-      case x =>
-        println("unknown! " + x)
-    }
-  }
   /**
    * Sets up a SocketServer and a IOClientConnection talking to it.
    */
@@ -211,9 +94,9 @@ class SocketServerTests extends FreeSpec with Eventually{
       settings=Some(ServerSettings(system).copy(sslEncryption = ssl))
     )
 
-    val client = TestActorRef(new TestClientActor(ssl = ssl))
+    val client = TestActorRef(new Util.TestClientActor(ssl = ssl))
     IO(Tcp).!(Tcp.Connect(new InetSocketAddress("localhost", port)))(client)
-    client await Tcp.Write(ByteString(websocketClientHandshake.getBytes))
+    client await Tcp.Write(ByteString(websocketClientHandshake))
     client
   }
 
@@ -222,14 +105,14 @@ class SocketServerTests extends FreeSpec with Eventually{
    */
   def doTwice(serverActor: => Actor = new ServerActor(Int.MaxValue),
               port: Int = 1000 + util.Random.nextInt(10000))
-             (test: TestActorRef[TestClientActor]   => Unit) = {
+             (test: TestActorRef[Util.TestClientActor]   => Unit) = {
     "basic" in test(setupConnection(port, serverActor, ssl=false))
     "ssl" in test(setupConnection(port + 1, serverActor, ssl=true))
   }
 
   "Echo Server Tests" - {
     "hello world with echo server" - doTwice(){ connection =>
-      def frame = Frame(true, (false, false, false), OpCode.Text, Some(12345123), "i am cow".getBytes)
+      def frame = Frame(true, (false, false, false), OpCode.Text, Some(12345123), "i am cow")
       println("First Message")
       val r3 = connection await frame
       assert(r3.stringData === "I AM COW1")
@@ -241,17 +124,17 @@ class SocketServerTests extends FreeSpec with Eventually{
     "Testing ability to receive fragmented message" - doTwice(){ connection =>
 
       val result1 = {
-        connection send Frame(FIN = false, opcode = OpCode.Text, maskingKey = Some(12345123), data = "i am cow ".getBytes)
-        connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(2139), data = "hear me moo ".getBytes)
-        connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(-23), data = "i weigh twice as much as you ".getBytes)
-        connection await Frame(opcode = OpCode.Continuation, maskingKey = Some(-124123212), data = "and i look good on the barbecue ".getBytes)
+        connection send Frame(FIN = false, opcode = OpCode.Text, maskingKey = Some(12345123), data = "i am cow ")
+        connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(2139), data = "hear me moo ")
+        connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(-23), data = "i weigh twice as much as you ")
+        connection await Frame(opcode = OpCode.Continuation, maskingKey = Some(-124123212), data = "and i look good on the barbecue ")
       }
       assert(result1.stringData === "I AM COW HEAR ME MOO I WEIGH TWICE AS MUCH AS YOU AND I LOOK GOOD ON THE BARBECUE 1")
 
       val result2 = {
-        connection send Frame(FIN = false, opcode = OpCode.Text, maskingKey = Some(12345123), data = "yoghurt curds cream cheese and butter ".getBytes)
-        connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(2139), data = "comes from liquids from my udder ".getBytes)
-        connection await Frame(opcode = OpCode.Text, maskingKey = Some(-23), data = "i am cow, i am cow, hear me moooo ".getBytes)
+        connection send Frame(FIN = false, opcode = OpCode.Text, maskingKey = Some(12345123), data = "yoghurt curds cream cheese and butter ")
+        connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(2139), data = "comes from liquids from my udder ")
+        connection await Frame(opcode = OpCode.Text, maskingKey = Some(-23), data = "i am cow, i am cow, hear me moooo ")
       }
       assert(result2.stringData === "YOGHURT CURDS CREAM CHEESE AND BUTTER COMES FROM LIQUIDS FROM MY UDDER I AM COW, I AM COW, HEAR ME MOOOO 2")
       
@@ -259,29 +142,28 @@ class SocketServerTests extends FreeSpec with Eventually{
     "Ping/Pong" - {
       "simple responses" - doTwice(){ connection =>
         
-        val res1 = connection await Frame(opcode = OpCode.Ping, maskingKey = Some(123456), data = "i am cow".getBytes)
+        val res1 = connection await Frame(opcode = OpCode.Ping, maskingKey = Some(123456), data = "i am cow")
         assert(res1.stringData === "i am cow")
-        val res2 = connection await Frame(opcode = OpCode.Ping, maskingKey = Some(123456), data = "i am cow".getBytes)
+        val res2 = connection await Frame(opcode = OpCode.Ping, maskingKey = Some(123456), data = "i am cow")
         assert(res2.stringData === "i am cow")
       
       }
       "responding in middle of fragmented message" - doTwice(){connection =>
         val result1 = {
-          connection send Frame(FIN = false, opcode = OpCode.Text, maskingKey = Some(12345123), data = "i am cow ".getBytes)
-          connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(2139), data = "hear me moo ".getBytes)
+          connection send Frame(FIN = false, opcode = OpCode.Text, maskingKey = Some(12345123), data = "i am cow ")
+          connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(2139), data = "hear me moo ")
 
-          val res1 = connection await Frame(opcode = OpCode.Ping, maskingKey = Some(123456), data = "i am cow".getBytes)
+          val res1 = connection await Frame(opcode = OpCode.Ping, maskingKey = Some(123456), data = "i am cow")
           assert(res1.stringData === "i am cow")
 
-          connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(-23), data = "i weigh twice as much as you ".getBytes)
+          connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(-23), data = "i weigh twice as much as you ")
 
-          val res2 = connection await Frame(opcode = OpCode.Ping, maskingKey = Some(123456), data = "i am cow".getBytes)
+          val res2 = connection await Frame(opcode = OpCode.Ping, maskingKey = Some(123456), data = "i am cow")
           assert(res2.stringData === "i am cow")
 
-          connection await Frame(opcode = OpCode.Continuation, maskingKey = Some(-124123212), data = "and i look good on the barbecue ".getBytes)
+          connection await Frame(opcode = OpCode.Continuation, maskingKey = Some(-124123212), data = "and i look good on the barbecue ")
         }
         assert(result1.stringData === "I AM COW HEAR ME MOO I WEIGH TWICE AS MUCH AS YOU AND I LOOK GOOD ON THE BARBECUE 1")
-        
       }
     }
 
@@ -354,7 +236,7 @@ class SocketServerTests extends FreeSpec with Eventually{
         def receive = {
           case f @ Frame(fin, rsv, Text, maskingKey, data) =>
             println("A")
-            sender ! Frame(fin, rsv, Text, None, lastDuration.toMillis.toString.getBytes)
+            sender ! Frame(fin, rsv, Text, None, lastDuration.toMillis.toString)
           case RoundTripTime(duration) =>
             println("B")
             lastDuration = duration
