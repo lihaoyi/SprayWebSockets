@@ -10,7 +10,7 @@ The basic workflow for taking an existing `HttpServer` application and making it
 
 ### Substitute Sockets in place of Http
 
-The main class of interest is [Sockets](https://github.com/lihaoyi/SprayWebSockets/blob/master/src/main/scala/spray/can/server/websockets/Sockets.scala). Here's a full example of its use:
+The main class of interest is [Sockets](https://github.com/lihaoyi/SprayWebSockets/blob/master/src/main/scala/spray/can/server/websockets/Sockets.scala). Here's a [full example](https://github.com/lihaoyi/SprayWebSockets/blob/master/src/test/scala/spray/can/server/websockets/SocketExample.scala) of its use:
 
 ```scala
 implicit val system = ActorSystem()
@@ -46,8 +46,15 @@ client await Tcp.Write(ByteString(
   "Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==\r\n\r\n"
 ))
 
-// Send the websocket frame
-val res = client await Frame(true, (false, false, false), OpCode.Text, Some(12345123), ByteString("i am cow"))
+// Send the websocket frame and wait for response
+val res = client await Frame(
+  true,
+  (false, false, false),
+  OpCode.Text,
+  Some(12345123),
+  ByteString("i am cow")
+)
+
 assert(res.data.decodeString("UTF-8") == "I AM COW") // capitalized response
 ```
 
