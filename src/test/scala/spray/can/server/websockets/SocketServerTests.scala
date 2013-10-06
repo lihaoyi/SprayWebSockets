@@ -24,12 +24,12 @@ import spray.can.Http
 import java.net.InetSocketAddress
 import akka.io.Tcp.{Register, Write, Connected}
 import spray.io.Pipeline.Tell
-import spray.can.server.websockets.SocketServer.RoundTripTime
+import spray.can.server.websockets.Sockets.RoundTripTime
 import akka.io.TcpPipelineHandler.WithinActorContext
 import spray.io.Pipeline.Tell
 import scala.Some
 import akka.io.SslTlsSupport
-import spray.can.server.websockets.SocketServer.RoundTripTime
+import spray.can.server.websockets.Sockets.RoundTripTime
 import akka.io.IO
 import spray.http.HttpRequest
 import spray.can.server.websockets.model.Frame.Successful
@@ -113,7 +113,7 @@ class SocketServerTests extends FreeSpec with Eventually{
       case req: HttpRequest =>
         println("Server Received")
         println(req.toString)
-        sender ! SocketServer.acceptAllFunction(req)
+        sender ! Sockets.acceptAllFunction(req)
         sender ! Sockets.Upgrade(TestActorRef(echoActor), autoPingInterval, () => Array(), maxMessageSize)
 
       case x: Connected =>
