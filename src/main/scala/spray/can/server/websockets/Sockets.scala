@@ -3,7 +3,7 @@ package spray.can.server.websockets
 import spray.can.{Http, HttpManager, HttpExt}
 import akka.actor._
 import spray.can.server._
-import spray.can.client.{HttpClientSettingsGroup, HttpHostConnector, ClientConnectionSettings}
+import spray.can.client._
 import spray.http._
 import scala.util.control.NonFatal
 import spray.can.server.StatsSupport.StatsHolder
@@ -212,7 +212,7 @@ class SocketManager(httpSettings: HttpExt#Settings) extends HttpManager(httpSett
   override def settingsGroupFor(settings: ClientConnectionSettings): ActorRef = {
     def createAndRegisterSettingsGroup = {
       val group = context.actorOf(
-        props = Props(new HttpClientSettingsGroup(settings, httpSettings)) withDispatcher SettingsGroupDispatcher,
+        props = Props(new SocketClientSettingsGroup(settings, httpSettings)) withDispatcher SettingsGroupDispatcher,
         name = "group-" + groupCounter.next())
       settingsGroups = settingsGroups.updated(settings, group)
       context.watch(group)
@@ -221,6 +221,30 @@ class SocketManager(httpSettings: HttpExt#Settings) extends HttpManager(httpSett
   }
 }
 
+private[can] class SocketClientSettingsGroup(settings: ClientConnectionSettings,
+                                           httpSettings: HttpExt#Settings) extends HttpClientSettingsGroup(settings, httpSettings){
+
+  override val pipelineStage = SocketClientConnection.pipelineStage(settings)
+}
+object SocketClientConnection{
+  def pipelineStage(settings: ClientConnectionSettings) = {
+    import settings._
+    Switching(
+      ClientFrontend(requestTimeout) >>
+        ResponseChunkAggregation(responseChunkAggregationLimit) ? (responseChunkAggregationLimit > 0) >>
+        ResponseParsing(parserSettings) >>
+        RequestRendering(settings) >>
+        ConnectionTimeouts(idleTimeout) ? (reapingCycle.isFinite && idleTimeout.isFinite)
+    ){case (upgrade: Sockets.Upgrade) =>
+      WebsocketFrontEnd(upgrade.frameHandler) >>
+        AutoPingPongs(upgrade.autoPingInterval, upgrade.pingGenerator) >>
+        Consolidation(upgrade.frameSizeLimit) >>
+        FrameParsing(upgrade.frameSizeLimit)
+    } >>
+      SslTlsSupport ? sslEncryption >>
+      TickGenerator(reapingCycle) ? (idleTimeout.isFinite || requestTimeout.isFinite)
+  }
+}
 /**
  * Sister class to HttpListener, but with a pipeline that supports websockets
  */
@@ -242,19 +266,21 @@ object SocketListener{
         RemoteAddressHeaderSupport ? remoteAddressHeader >>
         RequestParsing(settings) >>
         ResponseRendering(settings) >>
-        ConnectionTimeouts(idleTimeout) ? (reapingCycle.isFinite && idleTimeout.isFinite),
-      (upgrade: Sockets.Upgrade) =>
+        ConnectionTimeouts(idleTimeout) ? (reapingCycle.isFinite && idleTimeout.isFinite)
+    ){case (upgrade: Sockets.Upgrade) =>
         WebsocketFrontEnd(upgrade.frameHandler) >>
           AutoPingPongs(upgrade.autoPingInterval, upgrade.pingGenerator) >>
           Consolidation(upgrade.frameSizeLimit) >>
           FrameParsing(upgrade.frameSizeLimit)
-    ) >>
+    } >>
       SslTlsSupport ? sslEncryption >>
       TickGenerator(reapingCycle) ? (reapingCycle.isFinite && (idleTimeout.isFinite || requestTimeout.isFinite))
   }
 
 }
-case class Switching(stage1: RawPipelineStage[SslTlsContext with ServerFrontend.Context], stage2: Sockets.Upgrade => RawPipelineStage[SslTlsContext with ServerFrontend.Context]) extends RawPipelineStage[SslTlsContext with ServerFrontend.Context] {
+case class Switching(stage1: RawPipelineStage[SslTlsContext with ServerFrontend.Context])
+                    (stage2: PartialFunction[Tcp.Command, RawPipelineStage[SslTlsContext with ServerFrontend.Context]])
+                    extends RawPipelineStage[SslTlsContext with ServerFrontend.Context] {
 
   def apply(context: SslTlsContext with ServerFrontend.Context, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
@@ -265,8 +291,8 @@ case class Switching(stage1: RawPipelineStage[SslTlsContext with ServerFrontend.
 
       // it is important to introduce the proxy to the var here
       def commandPipeline: CPL = {
-        case upgrade: Sockets.Upgrade =>
-          val pl2 = stage2(upgrade)(context, commandPL, eventPL)
+        case x if stage2.isDefinedAt(x) =>
+          val pl2 = stage2(x)(context, commandPL, eventPL)
           eventPLVar = pl2.eventPipeline
           commandPLVar = pl2.commandPipeline
           eventPLVar(Connected)

@@ -271,5 +271,7 @@ class SocketsTest extends FreeSpec with Eventually{
       }
     }
   }
-
+  "Echo Client Tests" - {
+    "Hello World"
+  }
 }

@@ -15,7 +15,7 @@ import spray.http.HttpRequest
 import akka.io.Tcp.{Register, Connected}
 
 
-class SocketsExample extends FreeSpec with Eventually{
+class SocketExample extends FreeSpec with Eventually{
 
   "Hello World" in {
     implicit val system = ActorSystem()
