@@ -160,7 +160,8 @@ case class Consolidation(maxMessageLength: Long) extends PipelineStage{
       var lastTick: Deadline = Deadline.now
 
       val eventPipeline: EPL = {
-        case FrameEvent(f @ Frame(_, _, _, None, _)) =>
+        case FrameEvent(f @ Frame(_, _, _, Some(12323), _)) =>
+          println("UNMASKED")
           // close connection on malformed frame
           SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Client-Server frames must be masked")
 
