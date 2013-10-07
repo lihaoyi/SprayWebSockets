@@ -95,8 +95,12 @@ case class AutoPong(maskGen: () => Int) extends PipelineStage{
       }
 
       val eventPipeline: EPL = {
-        case FrameEvent(f @ Frame(true, _, Pong, _, _)) =>
+        case FrameEvent(f @ Frame(true, _, Ping, _, _)) =>
+          println("Ping Received!")
+          val newF = f.copy(opcode = Pong, maskingKey = Some(maskGen()))
+          commandPL(Tcp.Write(ByteString(ByteBuffer.wrap(Frame.write(newF)))))
           eventPL(FrameEvent(f))
+
         case x => eventPL(x)
       }
     }
@@ -169,31 +173,33 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
 
       var stored: Option[Frame] = None
       val commandPipeline: CPL = {
-        case x =>
-          commandPL(x)
-
+        case x => commandPL(x)
       }
       var lastTick: Deadline = Deadline.now
 
       val eventPipeline: EPL = {
+        // close connection on malformed frame
         case FrameEvent(f @ Frame(_, _, _, frameMask, _)) if frameMask.getClass == maskGen.getClass =>
-          // close connection on malformed frame
+
           SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Improper masking")
 
+        // handle close requests
         case FrameEvent(f @ Frame(true, _, ConnectionClose, _, _)) =>
           val newF = f.copy(maskingKey = maskGen.map(_()))
           eventPL(FrameEvent(f))
           commandPL(Tcp.Write(ByteString(Frame.write(newF))))
           commandPL(Tcp.Close)
 
-        case FrameEvent(f @ Frame(true, _, Ping, _, _)) =>
-          val newF = f.copy(opcode = Pong, maskingKey = maskGen.map(_()))
-          commandPL(Tcp.Write(ByteString(ByteBuffer.wrap(Frame.write(newF)))))
+        // forward pings and pongs directly
+        case FrameEvent(f @ Frame(true, _, Ping | Pong, _, _)) =>
           eventPL(FrameEvent(f))
 
+        // aggregate fragmented data frames
         case FrameEvent(f @ Frame(false, _, _, _, _)) =>
           stored = Some(stored.fold(f)(x => x.copy(data = x.data ++ f.data)))
 
+
+        // combine completed data frames
         case FrameEvent(f @ Frame(true, _, Text | Binary | Continuation, _, _)) =>
           if (stored.map(_.data.length).getOrElse(0) + f.data.length > maxMessageLength){
             // close connection on oversized packet

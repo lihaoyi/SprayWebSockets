@@ -164,32 +164,6 @@ class SocketsTest extends FreeSpec with Eventually{
       assert(result2.stringData === "YOGHURT CURDS CREAM CHEESE AND BUTTER COMES FROM LIQUIDS FROM MY UDDER I AM COW, I AM COW, HEAR ME MOOOO 2")
       
     }
-    "Ping/Pong" - {
-      "simple responses" - doTwice(clientActor = ssl => new ClientActor(ssl = ssl, filter = _ => true)){ connection =>
-        val res1 = connection await Frame(opcode = OpCode.Ping, maskingKey = Some(123456), data = "i am cow")
-        assert(res1.stringData === "i am cow")
-        val res2 = connection await Frame(opcode = OpCode.Ping, maskingKey = Some(123456), data = "i am cow")
-        assert(res2.stringData === "i am cow")
-      }
-
-      "responding in middle of fragmented message" - doTwice(clientActor = ssl => new ClientActor(ssl = ssl, filter = _ => true)){connection =>
-        val result1 = {
-          connection send Frame(FIN = false, opcode = OpCode.Text, maskingKey = Some(12345123), data = "i am cow ")
-          connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(2139), data = "hear me moo ")
-
-          val res1 = connection await Frame(opcode = OpCode.Ping, maskingKey = Some(123456), data = "i am cow")
-          assert(res1.stringData === "i am cow")
-
-          connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(-23), data = "i weigh twice as much as you ")
-
-          val res2 = connection await Frame(opcode = OpCode.Ping, maskingKey = Some(123456), data = "i am cow")
-          assert(res2.stringData === "i am cow")
-
-          connection await Frame(opcode = OpCode.Continuation, maskingKey = Some(-124123212), data = "and i look good on the barbecue ")
-        }
-        assert(result1.stringData === "I AM COW HEAR ME MOO I WEIGH TWICE AS MUCH AS YOU AND I LOOK GOOD ON THE BARBECUE 1")
-      }
-    }
 
     "Closing Tests" - {
       "Clean Close" - doTwice(){ connection =>
@@ -236,17 +210,6 @@ class SocketsTest extends FreeSpec with Eventually{
       }
     }
     "pinging" - {
-
-      "ping pong" - doTwice(clientActor = ssl => new ClientActor(ssl = ssl, filter = _ => true)){connection =>
-        val res1 = connection await Frame(opcode = OpCode.Ping, data = ByteString("hello ping"), maskingKey = Some(12345))
-        assert(res1.stringData === "hello ping")
-        assert(res1.opcode === OpCode.Pong)
-
-        val res2 = connection await Frame(opcode = OpCode.Ping, data = ByteString("hello ping again"), maskingKey = Some(12345))
-        assert(res2.stringData === "hello ping again")
-        assert(res2.opcode === OpCode.Pong)
-      }
-
       "auto ping" - doTwice(new ServerActor(autoPingInterval = 100 millis), clientActor = ssl => new ClientActor(ssl = ssl, filter = _ => true)){connection =>
         val res1 = connection.listen
         assert(res1.opcode === OpCode.Ping)
@@ -267,6 +230,23 @@ class SocketsTest extends FreeSpec with Eventually{
         }
         override def receive = newReceive orElse super.receive
 
+      }
+      "responding in middle of fragmented message" - doTwice(new ServerActor(autoPingInterval = 100 millis), clientActor = ssl => new ClientActor(ssl = ssl, filter = _ => true)){connection =>
+        val result1 = {
+          connection send Frame(FIN = false, opcode = OpCode.Text, maskingKey = Some(12345123), data = "i am cow ")
+          connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(2139), data = "hear me moo ")
+
+          val res1 = connection.listen
+          assert(res1.opcode === OpCode.Ping)
+
+          connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(-23), data = "i weigh twice as much as you ")
+
+          val res2 = connection.listen
+          assert(res2.opcode === OpCode.Ping)
+
+          connection await Frame(opcode = OpCode.Continuation, maskingKey = Some(-124123212), data = "and i look good on the barbecue ")
+        }
+        assert(result1.stringData === "I AM COW HEAR ME MOO I WEIGH TWICE AS MUCH AS YOU AND I LOOK GOOD ON THE BARBECUE 1")
       }
       "latency numbers" - doTwice(new TimingEchoActor(autoPingInterval = 100 millis)){connection =>
         {
