@@ -10,7 +10,7 @@ import spray.io.TickGenerator.Tick
 import akka.util.ByteString
 import akka.actor.{Props, Actor, ActorRef}
 
-import websockets.Sockets.Upgraded
+import spray.can.server.websockets.Sockets.Upgraded
 import concurrent.duration.{FiniteDuration, Duration, Deadline}
 import akka.io.Tcp
 
@@ -49,7 +49,7 @@ import SocketPhases.{FrameCommand,FrameEvent}
  *
  * @param handler the actor which will receive the incoming Frames
  */
-case class WebsocketFrontEnd(handler: ActorRef, filter: Frame => Boolean) extends PipelineStage{
+case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
 
   /**
    * Used to let the frameHandler send back unwrapped Frames, which it
@@ -75,7 +75,7 @@ case class WebsocketFrontEnd(handler: ActorRef, filter: Frame => Boolean) extend
       }
 
       val eventPipeline: EPL = {
-        case f @ FrameEvent(e) if filter(e) =>
+        case f @ FrameEvent(e) =>
            commandPL(Pipeline.Tell(handler, e, receiveAdapter))
         case Tcp.Closed =>
           commandPL(Pipeline.Tell(handler, Tcp.Closed, receiveAdapter))
@@ -96,59 +96,68 @@ case class AutoPong(maskGen: () => Int) extends PipelineStage{
 
       val eventPipeline: EPL = {
         case FrameEvent(f @ Frame(true, _, Ping, _, _)) =>
-          println("Ping Received!")
           val newF = f.copy(opcode = Pong, maskingKey = Some(maskGen()))
           commandPL(Tcp.Write(ByteString(ByteBuffer.wrap(Frame.write(newF)))))
-          eventPL(FrameEvent(f))
 
         case x => eventPL(x)
       }
     }
 }
+
+class Counter(var i: Int = 0) extends Function0[ByteString  ]{
+  def apply() = {
+    i += 1
+    ByteString(i+"")
+  }
+}
 /**
  * This phase automatically performs the pings and matches up the resultant Pongs,
  */
-case class AutoPing(pingInterval: Duration,
-                    pingGenerator: () => Array[Byte])
+case class AutoPing(interval: Duration = Duration.Inf,
+                    bodyGen: () => ByteString = new Counter(),
+                    memory: Int = 16)
                     extends PipelineStage{
 
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
-      var ticksInFlight = List[(ByteString, Deadline)]()
+
+      val ticksInFlight = new Array[(ByteString, Deadline)](memory)
+      var index = 0
       var lastTick: Deadline = Deadline.now
+
+      def sendData(byteString: ByteString) = {
+        lastTick = Deadline.now
+        ticksInFlight(index) = (byteString, lastTick)
+        index = (index + 1) % ticksInFlight.length
+        commandPL(FrameCommand(Frame(
+          opcode = OpCode.Ping,
+          data = byteString,
+          maskingKey = None
+        )))
+      }
 
       val commandPipeline: CPL = {
         case fc @ FrameCommand(f @ Frame(true, _, Ping, _, data)) =>
-          lastTick = Deadline.now
-          ticksInFlight = (data -> lastTick) :: ticksInFlight
-          commandPL(fc)
+          sendData(data)
+
         case x =>
           commandPL(x)
       }
 
       val eventPipeline: EPL = {
         case Tick =>
-          pingInterval match{
-            case f: FiniteDuration if (Deadline.now - lastTick) > pingInterval =>
-
-              val byteString = ByteString(pingGenerator())
-              lastTick = Deadline.now
-              ticksInFlight = (byteString -> lastTick) :: ticksInFlight
-              commandPipeline(FrameCommand(Frame(
-                opcode = OpCode.Ping,
-                data = byteString,
-                maskingKey = None
-              )))
+          interval match{
+            case f: FiniteDuration if (Deadline.now - lastTick) > interval =>
+              sendData(bodyGen())
             case _ =>
           }
 
         case fe @ FrameEvent(f @ Frame(true, _, Pong, _, data)) =>
-          val found = ticksInFlight.find(_._1 == data)
-
-          found.map(_._2).foreach{ timestamp =>
-            ticksInFlight = ticksInFlight.filter(_._2 > timestamp)
-            eventPL(Sockets.RoundTripTime(Deadline.now - timestamp))
-          }
+          ticksInFlight
+            .find(_._1 == data)
+            .foreach{ case (data, time) =>
+            eventPL(Sockets.RoundTripTime(Deadline.now - time))
+            }
 
           eventPL(fe)
 

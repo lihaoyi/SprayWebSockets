@@ -21,6 +21,8 @@ import spray.can.server.websockets.model.{OpCode, Frame}
 import spray.io
 import io.RawPipelineStage
 import spray.can.server.ServerFrontend.Context
+import akka.util.ByteString
+
 /**
  * Sister class to the spray.can.Http class, providing a http server with
  * websocket capabilities
@@ -31,18 +33,21 @@ object Sockets extends ExtensionKey[SocketExt]{
     def hidePingPongs(f: Frame) = f.opcode != OpCode.Ping && f.opcode != OpCode.Pong
   }
 
-  class UpgradeServer(val pipeline: RawPipelineStage[SslTlsContext with Context]) extends Command
-  class UpgradeClient(val pipeline: RawPipelineStage[PipelineContext]) extends Command
+  type ServerPipelineStage = RawPipelineStage[SslTlsContext with Context]
+  type ClientPipelineStage = RawPipelineStage[PipelineContext]
+  val EmptyPipelineStage = spray.io.EmptyPipelineStage
+  class UpgradeServer(val pipeline: ServerPipelineStage) extends Command
+  class UpgradeClient(val pipeline: ClientPipelineStage) extends Command
+
+
 
   object UpgradeServer{
     def apply(frameHandler: ActorRef,
-              frameSizeLimit: Int = Int.MaxValue,
-              filter: Frame => Boolean = Filters.hidePingPongs,
-              autoPingInterval: Duration = Duration.Inf,
-              pingGen: () => Array[Byte] = () => Array()) = {
+              frameSizeLimit: Int = Int.MaxValue)
+             (implicit extraStages: ServerPipelineStage = EmptyPipelineStage) = {
       new UpgradeServer(
-        WebsocketFrontEnd(frameHandler, filter) >>
-        AutoPing(autoPingInterval, pingGen) >>
+        WebsocketFrontEnd(frameHandler) >>
+        extraStages >>
         Consolidation(frameSizeLimit, None) >>
         FrameParsing(frameSizeLimit)
       )
@@ -51,11 +56,11 @@ object Sockets extends ExtensionKey[SocketExt]{
   object UpgradeClient{
     def apply(frameHandler: ActorRef,
               frameSizeLimit: Int = Int.MaxValue,
-              filter: Frame => Boolean = Filters.hidePingPongs,
-              maskGen: () => Int) ={
+              maskGen: () => Int = () => util.Random.nextInt())
+             (implicit extraStages: ClientPipelineStage = AutoPong(maskGen)) ={
       new UpgradeClient(
-        WebsocketFrontEnd(frameHandler, filter) >>
-        AutoPong(maskGen) >>
+        WebsocketFrontEnd(frameHandler) >>
+        extraStages >>
         Consolidation(frameSizeLimit, Some(maskGen)) >>
         FrameParsing(frameSizeLimit)
       )

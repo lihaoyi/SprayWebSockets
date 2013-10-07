@@ -5,55 +5,96 @@ import org.scalatest.concurrent.Eventually
 import akka.io.{Tcp, IO}
 import spray.can.Http
 import spray.can.server.ServerSettings
-import akka.actor.{ActorSystem, Actor}
+import akka.actor.{ActorRef, ActorSystem, Actor}
 import spray.can.server.websockets.model.{OpCode, Frame}
 import spray.can.server.websockets.model.OpCode.Text
 import akka.util.ByteString
 import akka.testkit.TestActorRef
 import java.net.InetSocketAddress
-import spray.http.HttpRequest
+import spray.http.{HttpResponse, HttpHeaders, HttpMethods, HttpRequest}
 import akka.io.Tcp.{Register, Connected}
-
-
+import spray.can.client.ClientConnectionSettings
+import scala.concurrent.Await
+import akka.pattern._
+import scala.concurrent.duration._
+import HttpHeaders._
 class SocketExample extends FreeSpec with Eventually{
 
-//  "Hello World" in {
-//    implicit val system = ActorSystem()
-//
-//    // Define the server that accepts http requests and upgrades them
-//    class Server extends Actor{
-//      def receive = {
-//        case req: HttpRequest =>
-//          sender ! Sockets.acceptAllFunction(req)
-//          sender ! Sockets.Upgrade(self)
-//
-//        case x: Connected =>
-//          sender ! Register(self)
-//
-//        case f @ Frame(fin, rsv, Text, maskingKey, data) =>
-//          sender ! Frame(fin, rsv, Text, None, ByteString(f.stringData.toUpperCase))
-//      }
-//    }
-//
-//    IO(Sockets) ! Http.Bind(TestActorRef(new Server), "localhost", 12345)
-//
-//    // A crappy ad-hoc websocket client
-//    val client = TestActorRef(new Util.TestClientActor(ssl = false))
-//
-//    IO(Tcp).!(Tcp.Connect(new InetSocketAddress("localhost", 12345)))(client)
-//
-//    // Send the http-ish handshake
-//    client await Tcp.Write(ByteString(
-//      "GET /mychat HTTP/1.1\r\n" +
-//      "Host: server.example.com\r\n" +
-//      "Upgrade: websocket\r\n" +
-//      "Connection: Upgrade\r\n" +
-//      "Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==\r\n\r\n"
-//    ))
-//
-//    // Send the websocket frame
-//    val res = client await Frame(true, (false, false, false), OpCode.Text, Some(12345123), ByteString("i am cow"))
-//    assert(res.data.decodeString("UTF-8") == "I AM COW")
-//  }
+  "Hello World" in {
+    implicit val system = ActorSystem()
+    implicit val patienceConfig = PatienceConfig(timeout = 2 seconds)
+    // Hard-code the websocket request
+    val upgradeReq = HttpRequest(HttpMethods.GET,  "/mychat", List(
+      Host("server.example.com", 80),
+      Connection("Upgrade"),
+      RawHeader("Sec-WebSocket-Key", "x3JJHMbDL1EzLkh9GBhXDw==")
+    ))
 
+    class SocketServer extends Actor{
+      def receive = {
+
+        case x: Tcp.Connected => sender ! Register(self) // normal Http server init
+
+        case req: HttpRequest =>
+          // Upgrade the connection to websockets if you think the incoming
+          // request looks good
+          if (true){
+            sender ! Sockets.acceptAllFunction(req) // helper to craft http response
+            sender ! Sockets.UpgradeServer(self) // upgrade the pipeline
+          }
+
+        case Sockets.Upgraded => // do nothing
+
+        case f @ Frame(fin, rsv, Text, maskingKey, data) =>
+          // Reply to frames with the text content capitalized
+          sender ! Frame(
+            opcode = OpCode.Text,
+            data = ByteString(f.stringData.toUpperCase)
+          )
+      }
+    }
+
+
+    class SocketClient extends Actor{
+      var result: Frame = null
+
+      def receive = {
+        case x: Tcp.Connected =>
+          sender ! Register(self) // normal Http client init
+          sender ! upgradeReq // send an upgrade request immediately when connected
+
+        case resp: HttpResponse =>
+          // when the response comes back, upgrade the connnection pipeline
+          sender ! Sockets.UpgradeClient(self)
+
+        case Sockets.Upgraded =>
+          // send a websocket frame when the upgrade is complete
+          sender ! Frame(
+            opcode = OpCode.Text,
+            maskingKey = Some(12345),
+            data = ByteString("i am cow")
+          )
+
+        case f: Frame =>
+          result = f // save the result
+      }
+    }
+    val server = TestActorRef(new SocketServer)
+
+    IO(Sockets) ! Http.Bind(
+      server,
+      "localhost",
+      12345
+    )
+
+    implicit val client = TestActorRef(new SocketClient)
+    IO(Sockets) ! Http.Connect(
+      "localhost",
+      12345
+    )
+
+    val result = eventually{client.underlyingActor.result.stringData}
+
+    assert(result == "I AM COW")
+  }
 }

@@ -11,16 +11,15 @@ import spray.http.{HttpResponse, HttpHeaders, HttpMethods, HttpRequest}
 import akka.testkit.TestActorRef
 import org.scalatest.concurrent.Eventually
 
-import akka.io._
 import spray.can.Http
-import spray.io.Pipeline.Tell
 import scala.Some
-import spray.can.server.websockets.Sockets.RoundTripTime
+import spray.can.server.websockets.Sockets.{ClientPipelineStage, ServerPipelineStage, RoundTripTime}
 import akka.io.IO
 import akka.io.Tcp.Connected
 import akka.io.Tcp.Register
 import spray.can.server.ServerSettings
 import spray.can.client.ClientConnectionSettings
+import spray.io.EmptyPipelineStage
 
 class SocketsTest extends FreeSpec with Eventually{
   implicit def string2bytestring(s: String) = ByteString(s)
@@ -35,12 +34,13 @@ class SocketsTest extends FreeSpec with Eventually{
    * a Websocket frameHandler which echoes any frames sent to it, but
    * capitalizes them and keeps count so you know it's alive
    */
-  class ServerActor(maxMessageSize: Int = Int.MaxValue, autoPingInterval: Duration = Duration.Inf) extends Actor{
+  class ServerActor(maxMessageSize: Int = Int.MaxValue,
+                    extraStages: ServerPipelineStage = EmptyPipelineStage) extends Actor{
     var count = 0
     def receive = {
       case req: HttpRequest =>
         sender ! Sockets.acceptAllFunction(req)
-        sender ! Sockets.UpgradeServer(self, maxMessageSize, autoPingInterval=autoPingInterval)
+        sender ! Sockets.UpgradeServer(self, maxMessageSize)(extraStages)
 
       case f @ Frame(fin, rsv, Text, maskingKey, data) =>
         count = count + 1
@@ -54,7 +54,8 @@ class SocketsTest extends FreeSpec with Eventually{
     }
   }
 
-  class ClientActor(ssl: Boolean, filter: Frame => Boolean = Sockets.Filters.hidePingPongs) extends Actor{
+  class ClientActor(ssl: Boolean,
+                    extraStages: ClientPipelineStage = EmptyPipelineStage) extends Actor{
     var connection: ActorRef = null
     var commander: ActorRef = null
 
@@ -62,7 +63,7 @@ class SocketsTest extends FreeSpec with Eventually{
     def receive = {
 
       case x: HttpResponse =>
-        connection ! Sockets.UpgradeClient(self, maskGen = () => 31337, filter = filter)
+        connection ! Sockets.UpgradeClient(self, maskGen = () => 31337)(extraStages)
 
       case x: Http.Connected =>
         connection = sender
@@ -104,7 +105,7 @@ class SocketsTest extends FreeSpec with Eventually{
                       serverActor: => Actor,
                       clientActor: Boolean => Actor,
                       ssl: Boolean) = {
-    val reqHandler = system.actorOf(Props(serverActor))
+    val reqHandler = TestActorRef(serverActor)
 
     IO(Sockets) ! Http.Bind(
       reqHandler,
@@ -210,15 +211,16 @@ class SocketsTest extends FreeSpec with Eventually{
       }
     }
     "pinging" - {
-      "auto ping" - doTwice(new ServerActor(autoPingInterval = 100 millis), clientActor = ssl => new ClientActor(ssl = ssl, filter = _ => true)){connection =>
+      "auto ping" - doTwice(new ServerActor(extraStages=AutoPing(interval = 100 millis)),
+                            ssl => new ClientActor(ssl = ssl, EmptyPipelineStage)){connection =>
         val res1 = connection.listen
         assert(res1.opcode === OpCode.Ping)
         val res2 = connection.listen
         assert(res2.opcode === OpCode.Ping)
       }
 
-      class TimingEchoActor(maxMessageSize: Int = Int.MaxValue, autoPingInterval: Duration = Duration.Inf)
-        extends ServerActor(maxMessageSize, autoPingInterval){
+      class TimingEchoActor(maxMessageSize: Int = Int.MaxValue, extraStages: ServerPipelineStage)
+        extends ServerActor(maxMessageSize, extraStages){
 
         var lastDuration = Duration.Zero
 
@@ -231,7 +233,8 @@ class SocketsTest extends FreeSpec with Eventually{
         override def receive = newReceive orElse super.receive
 
       }
-      "responding in middle of fragmented message" - doTwice(new ServerActor(autoPingInterval = 100 millis), clientActor = ssl => new ClientActor(ssl = ssl, filter = _ => true)){connection =>
+      "responding in middle of fragmented message" - doTwice(new ServerActor(extraStages=AutoPing(interval = 100 millis)),
+                                                            ssl => new ClientActor(ssl = ssl, EmptyPipelineStage)){connection =>
         val result1 = {
           connection send Frame(FIN = false, opcode = OpCode.Text, maskingKey = Some(12345123), data = "i am cow ")
           connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(2139), data = "hear me moo ")
@@ -248,7 +251,8 @@ class SocketsTest extends FreeSpec with Eventually{
         }
         assert(result1.stringData === "I AM COW HEAR ME MOO I WEIGH TWICE AS MUCH AS YOU AND I LOOK GOOD ON THE BARBECUE 1")
       }
-      "latency numbers" - doTwice(new TimingEchoActor(autoPingInterval = 100 millis)){connection =>
+      "latency numbers" - doTwice(new TimingEchoActor(extraStages=AutoPing(interval = 100 millis)),
+                                  ssl => new ClientActor(ssl = ssl, EmptyPipelineStage)){connection =>
         {
           //initial latency should be 0
           val res1 = connection await Frame(opcode = OpCode.Text, data = ByteString("hello ping"), maskingKey = Some(12345))
@@ -257,16 +261,19 @@ class SocketsTest extends FreeSpec with Eventually{
           // wait for ping and send pong
           val res2 = connection.listen
           assert(res2.opcode === OpCode.Ping)
+          Thread.sleep(200)
+
           connection send Frame(opcode = OpCode.Pong, data = res2.data, maskingKey = Some(12345))
 
           //new latency should be non zero
           val res3 = connection await Frame(opcode = OpCode.Text, data = ByteString("hello ping"), maskingKey = Some(12345))
-          assert(res3.stringData.toLong > 0)
+          assert(res3.stringData.toLong > 200)
         }
         {
           // wait for ping and send pong
           val res2 = connection.listen
           assert(res2.opcode === OpCode.Ping)
+          Thread.sleep(2)
           connection send Frame(opcode = OpCode.Pong, data = res2.data, maskingKey = Some(12345))
 
           //new latency should be non zero
