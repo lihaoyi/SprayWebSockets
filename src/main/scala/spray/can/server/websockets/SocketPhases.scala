@@ -91,7 +91,7 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
  */
 case class AutoPingPongs(pingInterval: Duration,
                          pingGenerator: () => Array[Byte],
-                         server: Boolean) extends PipelineStage{
+                         maskGen: () => Option[Int]) extends PipelineStage{
 
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
@@ -118,13 +118,12 @@ case class AutoPingPongs(pingInterval: Duration,
               commandPipeline(FrameCommand(Frame(
                 opcode = OpCode.Ping,
                 data = byteString,
-                maskingKey = if (server) None else Some(12345)
+                maskingKey = maskGen()
               )))
             case _ =>
           }
 
         case fe @ FrameEvent(f @ Frame(true, _, Pong, _, data)) =>
-          println("APP Pong")
           val found = ticksInFlight.find(_._1 == data)
 
           found.map(_._2).foreach{ timestamp =>
@@ -151,7 +150,7 @@ case class AutoPingPongs(pingInterval: Duration,
  * This only handles the stuff the spec says a server *must* handle. Everything
  * else should go on the phases on top of this.
  */
-case class Consolidation(maxMessageLength: Long, server: Boolean) extends PipelineStage{
+case class Consolidation(maxMessageLength: Long, maskGen: () => Option[Int]) extends PipelineStage{
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
 
@@ -164,22 +163,18 @@ case class Consolidation(maxMessageLength: Long, server: Boolean) extends Pipeli
       var lastTick: Deadline = Deadline.now
 
       val eventPipeline: EPL = {
-        case FrameEvent(f @ Frame(_, _, _, None, _)) if server =>
+        case FrameEvent(f @ Frame(_, _, _, frameMask, _)) if frameMask.getClass == maskGen().getClass =>
           // close connection on malformed frame
-          SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Client-Server frames must be masked")
-
-        case FrameEvent(f @ Frame(_, _, _, Some(_), _)) if !server =>
-          // close connection on malformed frame
-          SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Server-Client frames must NOT be masked")
+          SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Improper masking")
 
         case FrameEvent(f @ Frame(true, _, ConnectionClose, _, _)) =>
-          val newF = f.copy(maskingKey = if (server) None else Some(1234))
+          val newF = f.copy(maskingKey = maskGen())
           eventPL(FrameEvent(f))
           commandPL(Tcp.Write(ByteString(Frame.write(newF))))
           commandPL(Tcp.Close)
 
         case FrameEvent(f @ Frame(true, _, Ping, _, _)) =>
-          val newF = f.copy(opcode = Pong, maskingKey = if (server) None else Some(12345))
+          val newF = f.copy(opcode = Pong, maskingKey = maskGen())
           commandPL(Tcp.Write(ByteString(ByteBuffer.wrap(Frame.write(newF)))))
           eventPL(FrameEvent(f))
 
@@ -227,7 +222,6 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
 
       val eventPipeline: EPL = {
         case Tcp.Received(data) =>
-          println("Data Received " + x)
           streamBuffer = streamBuffer ++ data
 
           val buffer = streamBuffer.asByteBuffer
@@ -235,7 +229,6 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
           do{
             success = model.Frame.read(buffer, maxMessageLength) match{
               case Successful(frame) =>
-                println("Frame Parsed " + frame)
                 eventPL(FrameEvent(frame))
                 true
               case Incomplete =>

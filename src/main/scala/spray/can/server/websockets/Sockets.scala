@@ -24,10 +24,10 @@ import akka.actor.Terminated
  */
 object Sockets extends ExtensionKey[SocketExt]{
   case class Upgrade(frameHandler: ActorRef,
-                     server: Boolean,
                      autoPingInterval: Duration = Duration.Inf,
+                     frameSizeLimit: Int = Int.MaxValue,
                      pingGenerator: () => Array[Byte] = () => Array(),
-                     frameSizeLimit: Int = Int.MaxValue) extends Command
+                     maskGen: () => Option[Int] = () => None) extends Command
 
   /**
    * Sent by Sockets whenever an incoming Pong matches an
@@ -238,8 +238,8 @@ object SocketClientConnection{
         ConnectionTimeouts(idleTimeout) ? (reapingCycle.isFinite && idleTimeout.isFinite)
     ){case (upgrade: Sockets.Upgrade) =>
       WebsocketFrontEnd(upgrade.frameHandler) >>
-        AutoPingPongs(upgrade.autoPingInterval, upgrade.pingGenerator, upgrade.server) >>
-        Consolidation(upgrade.frameSizeLimit, upgrade.server) >>
+        AutoPingPongs(upgrade.autoPingInterval, upgrade.pingGenerator, upgrade.maskGen) >>
+        Consolidation(upgrade.frameSizeLimit, upgrade.maskGen) >>
         FrameParsing(upgrade.frameSizeLimit)
     } >>
       SslTlsSupport ? sslEncryption >>
@@ -270,8 +270,8 @@ object SocketListener{
         ConnectionTimeouts(idleTimeout) ? (reapingCycle.isFinite && idleTimeout.isFinite)
     ){case (upgrade: Sockets.Upgrade) =>
         WebsocketFrontEnd(upgrade.frameHandler) >>
-          AutoPingPongs(upgrade.autoPingInterval, upgrade.pingGenerator, upgrade.server) >>
-          Consolidation(upgrade.frameSizeLimit, upgrade.server) >>
+          AutoPingPongs(upgrade.autoPingInterval, upgrade.pingGenerator, upgrade.maskGen) >>
+          Consolidation(upgrade.frameSizeLimit, upgrade.maskGen) >>
           FrameParsing(upgrade.frameSizeLimit)
     } >>
       SslTlsSupport ? sslEncryption >>

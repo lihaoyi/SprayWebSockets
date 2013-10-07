@@ -39,17 +39,14 @@ class SocketsTest extends FreeSpec with Eventually{
     var count = 0
     def receive = {
       case req: HttpRequest =>
-        println("Server Request Received")
         sender ! Sockets.acceptAllFunction(req)
-        sender ! Sockets.Upgrade(self, server=true, autoPingInterval, () => Array(), maxMessageSize)
+        sender ! Sockets.Upgrade(self, autoPingInterval, maxMessageSize)
 
       case f @ Frame(fin, rsv, Text, maskingKey, data) =>
-        println("Server Received Frame " + f)
         count = count + 1
         sender ! Frame(fin, rsv, Text, None, f.stringData.toUpperCase + count)
 
       case x: Connected =>
-        println("Server Connected")
         sender ! Register(self)
 
       case Sockets.Upgraded =>
@@ -65,7 +62,7 @@ class SocketsTest extends FreeSpec with Eventually{
     def receive = {
 
       case x: HttpResponse =>
-        connection ! Sockets.Upgrade(self, server=false)
+        connection ! Sockets.Upgrade(self, maskGen = () => Some(31337))
 
       case x: Http.Connected =>
         connection = sender
@@ -77,13 +74,10 @@ class SocketsTest extends FreeSpec with Eventually{
         ready = true
 
       case Util.Send(frame) =>
-        println("Client Send Frame " + frame)
         commander = sender
         connection ! frame
 
       case f: Frame =>
-        println("Client Received " + f)
-        println("Forwarding to " + commander)
         commander ! f
 
       case "ready?" =>
@@ -91,7 +85,6 @@ class SocketsTest extends FreeSpec with Eventually{
         commander = sender
 
       case Util.Listen =>
-        println("Listening... " + sender)
         commander = sender
 
       case x => println("Client Unknown " + x)
@@ -266,10 +259,8 @@ class SocketsTest extends FreeSpec with Eventually{
 
         def newReceive: PartialFunction[Any, Unit] = {
           case f @ Frame(fin, rsv, Text, maskingKey, data) =>
-            println("A")
             sender ! Frame(fin, rsv, Text, None, lastDuration.toMillis.toString)
           case RoundTripTime(duration) =>
-            println("B")
             lastDuration = duration
         }
         override def receive = newReceive orElse super.receive
