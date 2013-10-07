@@ -24,6 +24,7 @@ import akka.actor.Terminated
  */
 object Sockets extends ExtensionKey[SocketExt]{
   case class Upgrade(frameHandler: ActorRef,
+                     server: Boolean,
                      autoPingInterval: Duration = Duration.Inf,
                      pingGenerator: () => Array[Byte] = () => Array(),
                      frameSizeLimit: Int = Int.MaxValue) extends Command
@@ -238,7 +239,7 @@ object SocketClientConnection{
     ){case (upgrade: Sockets.Upgrade) =>
       WebsocketFrontEnd(upgrade.frameHandler) >>
         AutoPingPongs(upgrade.autoPingInterval, upgrade.pingGenerator) >>
-        Consolidation(upgrade.frameSizeLimit) >>
+        Consolidation(upgrade.frameSizeLimit, upgrade.server) >>
         FrameParsing(upgrade.frameSizeLimit)
     } >>
       SslTlsSupport ? sslEncryption >>
@@ -270,7 +271,7 @@ object SocketListener{
     ){case (upgrade: Sockets.Upgrade) =>
         WebsocketFrontEnd(upgrade.frameHandler) >>
           AutoPingPongs(upgrade.autoPingInterval, upgrade.pingGenerator) >>
-          Consolidation(upgrade.frameSizeLimit) >>
+          Consolidation(upgrade.frameSizeLimit, upgrade.server) >>
           FrameParsing(upgrade.frameSizeLimit)
     } >>
       SslTlsSupport ? sslEncryption >>

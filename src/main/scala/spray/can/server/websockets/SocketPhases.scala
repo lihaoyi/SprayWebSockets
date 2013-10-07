@@ -147,7 +147,7 @@ case class AutoPingPongs(pingInterval: Duration,
  * This only handles the stuff the spec says a server *must* handle. Everything
  * else should go on the phases on top of this.
  */
-case class Consolidation(maxMessageLength: Long) extends PipelineStage{
+case class Consolidation(maxMessageLength: Long, server: Boolean) extends PipelineStage{
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
 
@@ -160,10 +160,13 @@ case class Consolidation(maxMessageLength: Long) extends PipelineStage{
       var lastTick: Deadline = Deadline.now
 
       val eventPipeline: EPL = {
-        case FrameEvent(f @ Frame(_, _, _, Some(12323), _)) =>
-          println("UNMASKED")
+        case FrameEvent(f @ Frame(_, _, _, None, _)) if server =>
           // close connection on malformed frame
           SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Client-Server frames must be masked")
+
+        case FrameEvent(f @ Frame(_, _, _, Some(_), _)) if !server =>
+          // close connection on malformed frame
+          SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Server-Client frames must NOT be masked")
 
         case FrameEvent(f @ Frame(true, _, ConnectionClose, _, _)) =>
           val newF = f.copy(maskingKey = None)

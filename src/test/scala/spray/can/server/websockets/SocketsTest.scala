@@ -41,12 +41,12 @@ class SocketsTest extends FreeSpec with Eventually{
       case req: HttpRequest =>
         println("Server Request Received")
         sender ! Sockets.acceptAllFunction(req)
-        sender ! Sockets.Upgrade(self, autoPingInterval, () => Array(), maxMessageSize)
+        sender ! Sockets.Upgrade(self, server=true, autoPingInterval, () => Array(), maxMessageSize)
 
       case f @ Frame(fin, rsv, Text, maskingKey, data) =>
         println("Server Received Frame " + f)
         count = count + 1
-        sender ! Frame(fin, rsv, Text, Some(12345), f.stringData.toUpperCase + count)
+        sender ! Frame(fin, rsv, Text, None, f.stringData.toUpperCase + count)
 
       case x: Connected =>
         println("Server Connected")
@@ -64,7 +64,7 @@ class SocketsTest extends FreeSpec with Eventually{
     def receive = {
 
       case x: HttpResponse =>
-        connection ! Sockets.Upgrade(self)
+        connection ! Sockets.Upgrade(self, server=false)
 
       case x: Http.Connected =>
         connection = sender
