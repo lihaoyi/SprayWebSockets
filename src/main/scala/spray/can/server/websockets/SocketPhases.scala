@@ -10,7 +10,7 @@ import spray.io.TickGenerator.Tick
 import akka.util.ByteString
 import akka.actor.{Props, Actor, ActorRef}
 
-import websockets.Sockets.Connected
+import websockets.Sockets.Upgraded
 import concurrent.duration.{FiniteDuration, Duration, Deadline}
 import akka.io.Tcp
 
@@ -57,8 +57,10 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
    */
   class ReceiverProxy(pcontext: PipelineContext) extends Actor{
     def receive = {
-      case f: model.Frame => pcontext.actorContext.self ! FrameCommand(f)
-      case Tcp.Close => pcontext.actorContext.self ! Tcp.Close
+      case f: model.Frame =>
+        pcontext.actorContext.self ! FrameCommand(f)
+      case Tcp.Close =>
+        pcontext.actorContext.self ! Tcp.Close
     }
   }
 
@@ -68,13 +70,16 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
       val receiveAdapter = pcontext.actorContext.actorOf(Props(new ReceiverProxy(pcontext)))
 
       val commandPipeline: CPL = {
-        case f => commandPL(f)
+        case f =>
+          commandPL(f)
       }
 
       val eventPipeline: EPL = {
-        case f @ FrameEvent(e) => commandPL(Pipeline.Tell(handler, e, receiveAdapter))
-        case Tcp.Closed => commandPL(Pipeline.Tell(handler, Tcp.Closed, receiveAdapter))
-        case Sockets.Connected => commandPL(Pipeline.Tell(handler, Connected, receiveAdapter))
+        case f @ FrameEvent(e) =>
+          commandPL(Pipeline.Tell(handler, e, receiveAdapter))
+        case Tcp.Closed =>
+          commandPL(Pipeline.Tell(handler, Tcp.Closed, receiveAdapter))
+        case Sockets.Upgraded => commandPL(Pipeline.Tell(handler, Upgraded, receiveAdapter))
         case rtt: Sockets.RoundTripTime => commandPL(Pipeline.Tell(handler, rtt, receiveAdapter))
         case x => // ignore all other events, e.g. Ticks
       }
@@ -97,7 +102,9 @@ case class AutoPingPongs(pingInterval: Duration,
           lastTick = Deadline.now
           ticksInFlight = (data -> lastTick) :: ticksInFlight
           commandPL(fc)
-        case x => commandPL(x)
+        case x =>
+
+          commandPL(x)
       }
 
       val eventPipeline: EPL = {
@@ -146,7 +153,9 @@ case class Consolidation(maxMessageLength: Long) extends PipelineStage{
 
       var stored: Option[Frame] = None
       val commandPipeline: CPL = {
-        case x => commandPL(x)
+        case x =>
+          commandPL(x)
+
       }
       var lastTick: Deadline = Deadline.now
 
@@ -173,7 +182,7 @@ case class Consolidation(maxMessageLength: Long) extends PipelineStage{
             SocketPhases.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
           }else{
             stored = Some(stored.fold(f)(x => x.copy(data = x.data ++ f.data)))
-            eventPL(FrameEvent(stored.get.copy(data = stored.get.data.compact)))
+            eventPL(FrameEvent(stored.get.copy(FIN=true, data = stored.get.data.compact)))
             stored = None
           }
 
@@ -189,12 +198,14 @@ case class Consolidation(maxMessageLength: Long) extends PipelineStage{
  * spread out over multiple frames. Otherwise does not do anything fancy.
  */
 case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
+  val x = (math.random * 100).toInt
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
       var streamBuffer: ByteString = ByteString()
       val commandPipeline: CPL = {
         case f: FrameCommand =>
           val bytes = ByteString(Frame.write(f.frame))
+
           commandPL(Tcp.Write(bytes))
         case x =>
           commandPL(x)
@@ -202,11 +213,15 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
 
       val eventPipeline: EPL = {
         case Tcp.Received(data) =>
+          println("Data Received " + x)
           streamBuffer = streamBuffer ++ data
+
           val buffer = streamBuffer.asByteBuffer
-          while(
-            model.Frame.read(buffer, maxMessageLength) match{
+          var success = true
+          do{
+            success = model.Frame.read(buffer, maxMessageLength) match{
               case Successful(frame) =>
+                println("Frame Parsed " + frame)
                 eventPL(FrameEvent(frame))
                 true
               case Incomplete =>
@@ -215,10 +230,12 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
                 SocketPhases.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
                 false
             }
-          ){}
+          }while(success)
           streamBuffer = ByteString(buffer)
 
-        case x => eventPL(x)
+
+        case x =>
+          eventPL(x)
       }
     }
 }

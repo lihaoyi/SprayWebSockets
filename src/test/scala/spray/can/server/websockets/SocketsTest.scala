@@ -1,41 +1,26 @@
 package spray.can.server.websockets
 
 import model._
-import model.Frame.Successful
 import model.OpCode.{ConnectionClose, Text}
 import org.scalatest.FreeSpec
 import akka.actor._
 import concurrent.duration._
-import spray.io._
 import scala.concurrent.{Promise, Await}
 import akka.util.{ByteString, Timeout}
-import spray.http.HttpRequest
+import spray.http.{HttpResponse, HttpHeaders, HttpMethods, HttpRequest}
 import akka.testkit.TestActorRef
 import org.scalatest.concurrent.Eventually
 
-import javax.net.ssl.{SSLEngine, TrustManagerFactory, KeyManagerFactory, SSLContext}
-import java.security.{SecureRandom, KeyStore}
-
-import scala.Some
-
-import org.scalatest.time.{Seconds, Span}
 import akka.io._
 import spray.can.Http
-import java.net.InetSocketAddress
-import akka.io.Tcp.{Register, Write, Connected}
-import spray.io.Pipeline.Tell
-import spray.can.server.websockets.Sockets.RoundTripTime
-import akka.io.TcpPipelineHandler.WithinActorContext
 import spray.io.Pipeline.Tell
 import scala.Some
-import akka.io.SslTlsSupport
 import spray.can.server.websockets.Sockets.RoundTripTime
 import akka.io.IO
-import spray.http.HttpRequest
-import spray.can.server.websockets.model.Frame.Successful
 import akka.io.Tcp.Connected
 import akka.io.Tcp.Register
 import spray.can.server.ServerSettings
+import spray.can.client.ClientConnectionSettings
 
 class SocketsTest extends FreeSpec with Eventually{
   implicit def string2bytestring(s: String) = ByteString(s)
@@ -44,41 +29,67 @@ class SocketsTest extends FreeSpec with Eventually{
 
   implicit val sslContext = Util.createSslContext("/ssl-test-keystore.jks", "")
 
-  val websocketClientHandshake =
-    "GET /mychat HTTP/1.1\r\n" +
-    "Host: server.example.com\r\n" +
-    "Upgrade: websocket\r\n" +
-    "Connection: Upgrade\r\n" +
-    "Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==\r\n\r\n"
   import scala.concurrent.duration.Duration
   /**
-   * HttpHandler which always accepts websocket upgrade requests
-   */
-  class ServerActor(maxMessageSize: Int = Int.MaxValue, autoPingInterval: Duration = Duration.Inf, echoActor: => Actor = new EchoActor()) extends Actor{
-    def receive = {
-      case req: HttpRequest =>
-        sender ! Sockets.acceptAllFunction(req)
-        sender ! Sockets.Upgrade(TestActorRef(echoActor), autoPingInterval, () => Array(), maxMessageSize)
-
-      case x: Connected =>
-        sender ! Register(self)
-    }
-  }
-
-  /**
-   * Websocket frameHandler which echoes any frames sent to it, but
+   * Webserver which always accepts websocket upgrade requests. Also doubles as
+   * a Websocket frameHandler which echoes any frames sent to it, but
    * capitalizes them and keeps count so you know it's alive
    */
-  class EchoActor extends Actor{
+  class ServerActor(maxMessageSize: Int = Int.MaxValue, autoPingInterval: Duration = Duration.Inf) extends Actor{
     var count = 0
     def receive = {
+      case req: HttpRequest =>
+        println("Server Request Received")
+        sender ! Sockets.acceptAllFunction(req)
+        sender ! Sockets.Upgrade(self, autoPingInterval, () => Array(), maxMessageSize)
+
       case f @ Frame(fin, rsv, Text, maskingKey, data) =>
+        println("Server Received Frame " + f)
         count = count + 1
-        sender ! Frame(fin, rsv, Text, None, (f.stringData.toUpperCase + count))
-      case x =>
+        sender ! Frame(fin, rsv, Text, Some(12345), f.stringData.toUpperCase + count)
+
+      case x: Connected =>
+        println("Server Connected")
+        sender ! Register(self)
+      case Sockets.Upgraded =>
+        println("Server Upgraded")
     }
   }
 
+  class ClientActor(req: HttpRequest, ssl: Boolean) extends Actor{
+    var connection: ActorRef = null
+    var commander: ActorRef = null
+
+    var ready = false
+    def receive = {
+
+      case x: HttpResponse =>
+        connection ! Sockets.Upgrade(self)
+
+      case x: Http.Connected =>
+        connection = sender
+        connection ! req
+
+      case Sockets.Upgraded =>
+        println("Client Upgraded")
+        connection = sender
+        ready = true
+
+      case Util.Send(frame) =>
+        println("Client Send Frame " + frame)
+        commander = sender
+        connection ! frame
+
+      case f: Frame =>
+        println("Client Received " + f)
+        commander ! f
+
+      case "ready?" =>
+        sender ! ready
+      case x =>
+        println("Client Unknown " + x)
+    }
+  }
   /**
    * Sets up a SocketServer and a IOClientConnection talking to it.
    */
@@ -94,9 +105,22 @@ class SocketsTest extends FreeSpec with Eventually{
       settings=Some(ServerSettings(system).copy(sslEncryption = ssl))
     )
 
-    val client = TestActorRef(new Util.TestClientActor(ssl = ssl))
-    IO(Tcp).!(Tcp.Connect(new InetSocketAddress("localhost", port)))(client)
-    client await Tcp.Write(ByteString(websocketClientHandshake))
+    import akka.pattern._
+
+    val req = HttpRequest(HttpMethods.GET,  "/mychat", List(
+      HttpHeaders.Host("server.example.com", 80),
+      HttpHeaders.Connection("Upgrade"),
+      HttpHeaders.RawHeader("Sec-WebSocket-Key", "x3JJHMbDL1EzLkh9GBhXDw==")
+    ))
+
+    val client = TestActorRef(new ClientActor(req, ssl = ssl))
+
+    IO(Sockets).!(Http.Connect("localhost", port, settings=Some(ClientConnectionSettings(system).copy(sslEncryption = ssl))))(client)
+
+    eventually{
+      assert(Await.result(client ? "ready?", 0.1 seconds) == true)
+    }(PatienceConfig(timeout=10 seconds))
+
     client
   }
 
@@ -105,18 +129,16 @@ class SocketsTest extends FreeSpec with Eventually{
    */
   def doTwice(serverActor: => Actor = new ServerActor(Int.MaxValue),
               port: Int = 1000 + util.Random.nextInt(10000))
-             (test: TestActorRef[Util.TestClientActor]   => Unit) = {
+             (test: ActorRef => Unit) = {
     "basic" in test(setupConnection(port, serverActor, ssl=false))
     "ssl" in test(setupConnection(port + 1, serverActor, ssl=true))
   }
-
+  import Util.blockActorRef
   "Echo Server Tests" - {
     "hello world with echo server" - doTwice(){ connection =>
       def frame = Frame(true, (false, false, false), OpCode.Text, Some(12345123), "i am cow")
-      println("First Message")
       val r3 = connection await frame
       assert(r3.stringData === "I AM COW1")
-      println("Second Message")
       val r4 = connection await frame
       assert(r4.stringData === "I AM COW2")
     }
@@ -224,16 +246,18 @@ class SocketsTest extends FreeSpec with Eventually{
 
       }
       "auto ping" - doTwice(new ServerActor(autoPingInterval = 100 millis)){connection =>
-        val res1 = connection await Tell(TestActorRef(new Actor{def receive = {case x =>}}), "lol", null)
+        val res1 = connection.listen
         assert(res1.opcode === OpCode.Ping)
-        val res2 = connection await Tell(TestActorRef(new Actor{def receive = {case x =>}}), "lol", null)
+        val res2 = connection.listen
         assert(res2.opcode === OpCode.Ping)
       }
 
-      class TimingEchoActor extends Actor{
+      class TimingEchoActor(maxMessageSize: Int = Int.MaxValue, autoPingInterval: Duration = Duration.Inf)
+        extends ServerActor(maxMessageSize, autoPingInterval){
+
         var lastDuration = Duration.Zero
 
-        def receive = {
+        def newReceive: PartialFunction[Any, Unit] = {
           case f @ Frame(fin, rsv, Text, maskingKey, data) =>
             println("A")
             sender ! Frame(fin, rsv, Text, None, lastDuration.toMillis.toString)
@@ -241,15 +265,17 @@ class SocketsTest extends FreeSpec with Eventually{
             println("B")
             lastDuration = duration
         }
+        override def receive = newReceive orElse super.receive
+
       }
-      "latency numbers" - doTwice(new ServerActor(autoPingInterval = 100 millis, echoActor = new TimingEchoActor())){connection =>
+      "latency numbers" - doTwice(new TimingEchoActor(autoPingInterval = 100 millis)){connection =>
         {
           //initial latency should be 0
           val res1 = connection await Frame(opcode = OpCode.Text, data = ByteString("hello ping"), maskingKey = Some(12345))
           assert(res1.stringData === "0")
 
           // wait for ping and send pong
-          val res2 = connection await Tell(TestActorRef(new Actor{def receive = {case x =>}}), "lol", null)
+          val res2 = connection.listen
           assert(res2.opcode === OpCode.Ping)
           connection send Frame(opcode = OpCode.Pong, data = res2.data, maskingKey = Some(12345))
 
@@ -259,7 +285,7 @@ class SocketsTest extends FreeSpec with Eventually{
         }
         {
           // wait for ping and send pong
-          val res2 = connection await Tell(TestActorRef(new Actor{def receive = {case x =>}}), "lol", null)
+          val res2 = connection.listen
           assert(res2.opcode === OpCode.Ping)
           Thread.sleep(200)
           connection send Frame(opcode = OpCode.Pong, data = res2.data, maskingKey = Some(12345))
@@ -271,7 +297,5 @@ class SocketsTest extends FreeSpec with Eventually{
       }
     }
   }
-  "Echo Client Tests" - {
-    "Hello World"
-  }
+
 }

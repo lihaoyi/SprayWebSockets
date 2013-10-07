@@ -10,7 +10,7 @@ import spray.can.server.StatsSupport.StatsHolder
 import spray.io._
 import akka.actor.Terminated
 import scala.concurrent.duration.{FiniteDuration, Duration}
-import spray.can.server.websockets.Sockets.Connected
+import spray.can.server.websockets.Sockets.Upgraded
 import akka.io.Tcp
 import java.security.MessageDigest
 import spray.http.HttpHeaders.RawHeader
@@ -39,7 +39,7 @@ object Sockets extends ExtensionKey[SocketExt]{
    * Sent by Sockets to the frameHandler when a websocket handshake
    * is complete and the connection upgraded
    */
-  case object Connected extends Event
+  case object Upgraded extends Event
 
   def calculateReturnHash(headers: List[HttpHeader]) = {
     headers.collectFirst{
@@ -295,7 +295,7 @@ case class Switching[T <: PipelineContext](stage1: RawPipelineStage[T])
           val pl2 = stage2(x)(context, commandPL, eventPL)
           eventPLVar = pl2.eventPipeline
           commandPLVar = pl2.commandPipeline
-          eventPLVar(Connected)
+          eventPLVar(Upgraded)
         case c => commandPLVar(c)
       }
       def eventPipeline: EPL = {
