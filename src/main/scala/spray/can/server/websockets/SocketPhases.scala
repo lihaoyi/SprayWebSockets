@@ -195,9 +195,9 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
         // handle close requests
         case FrameEvent(f @ Frame(true, _, ConnectionClose, _, _)) =>
           val newF = f.copy(maskingKey = maskGen.map(_()))
-          eventPL(FrameEvent(f))
           commandPL(Tcp.Write(ByteString(Frame.write(newF))))
-          commandPL(Tcp.Close)
+          //eventPL(FrameEvent(f))
+          //commandPL(Tcp.Close)
 
         // forward pings and pongs directly
         case FrameEvent(f @ Frame(true, _, Ping | Pong, _, _)) =>
