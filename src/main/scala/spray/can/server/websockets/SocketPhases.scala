@@ -90,7 +90,8 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
  * This phase automatically performs the pings and matches up the resultant Pongs,
  */
 case class AutoPingPongs(pingInterval: Duration,
-                         pingGenerator: () => Array[Byte]) extends PipelineStage{
+                         pingGenerator: () => Array[Byte],
+                         server: Boolean) extends PipelineStage{
 
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
@@ -103,7 +104,6 @@ case class AutoPingPongs(pingInterval: Duration,
           ticksInFlight = (data -> lastTick) :: ticksInFlight
           commandPL(fc)
         case x =>
-
           commandPL(x)
       }
 
@@ -117,12 +117,14 @@ case class AutoPingPongs(pingInterval: Duration,
               ticksInFlight = (byteString -> lastTick) :: ticksInFlight
               commandPipeline(FrameCommand(Frame(
                 opcode = OpCode.Ping,
-                data = byteString
+                data = byteString,
+                maskingKey = if (server) None else Some(12345)
               )))
             case _ =>
           }
 
         case fe @ FrameEvent(f @ Frame(true, _, Pong, _, data)) =>
+          println("APP Pong")
           val found = ticksInFlight.find(_._1 == data)
 
           found.map(_._2).foreach{ timestamp =>
@@ -132,7 +134,9 @@ case class AutoPingPongs(pingInterval: Duration,
 
           eventPL(fe)
 
-        case x => eventPL(x)
+        case x =>
+
+          eventPL(x)
       }
     }
 }
@@ -169,18 +173,23 @@ case class Consolidation(maxMessageLength: Long, server: Boolean) extends Pipeli
           SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Server-Client frames must NOT be masked")
 
         case FrameEvent(f @ Frame(true, _, ConnectionClose, _, _)) =>
-          val newF = f.copy(maskingKey = None)
+          val newF = f.copy(maskingKey = if (server) None else Some(1234))
+          eventPL(FrameEvent(f))
           commandPL(Tcp.Write(ByteString(Frame.write(newF))))
           commandPL(Tcp.Close)
 
         case FrameEvent(f @ Frame(true, _, Ping, _, _)) =>
-          val newF = f.copy(opcode = Pong, maskingKey = None)
+          val newF = f.copy(opcode = Pong, maskingKey = if (server) None else Some(12345))
           commandPL(Tcp.Write(ByteString(ByteBuffer.wrap(Frame.write(newF)))))
+          eventPL(FrameEvent(f))
 
         case FrameEvent(f @ Frame(false, _, _, _, _)) =>
           stored = Some(stored.fold(f)(x => x.copy(data = x.data ++ f.data)))
 
-        case FrameEvent(f @ Frame(true, _, _, _, _)) =>
+        case FrameEvent(f @ Frame(true, _, Pong, _, _)) =>
+          eventPL(FrameEvent(f))
+
+        case FrameEvent(f @ Frame(true, _, Text | Binary | Continuation, _, _)) =>
           if (stored.map(_.data.length).getOrElse(0) + f.data.length > maxMessageLength){
             // close connection on oversized packet
             SocketPhases.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
@@ -190,7 +199,8 @@ case class Consolidation(maxMessageLength: Long, server: Boolean) extends Pipeli
             stored = None
           }
 
-        case msg => eventPL(msg)
+        case msg =>
+          eventPL(msg)
       }
     }
 }

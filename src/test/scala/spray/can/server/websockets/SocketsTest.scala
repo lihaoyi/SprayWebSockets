@@ -51,6 +51,7 @@ class SocketsTest extends FreeSpec with Eventually{
       case x: Connected =>
         println("Server Connected")
         sender ! Register(self)
+
       case Sockets.Upgraded =>
         println("Server Upgraded")
     }
@@ -82,12 +83,18 @@ class SocketsTest extends FreeSpec with Eventually{
 
       case f: Frame =>
         println("Client Received " + f)
+        println("Forwarding to " + commander)
         commander ! f
 
       case "ready?" =>
         sender ! ready
-      case x =>
-        println("Client Unknown " + x)
+        commander = sender
+
+      case Util.Listen =>
+        println("Listening... " + sender)
+        commander = sender
+
+      case x => println("Client Unknown " + x)
     }
   }
   /**
@@ -243,8 +250,8 @@ class SocketsTest extends FreeSpec with Eventually{
         val res2 = connection await Frame(opcode = OpCode.Ping, data = ByteString("hello ping again"), maskingKey = Some(12345))
         assert(res2.stringData === "hello ping again")
         assert(res2.opcode === OpCode.Pong)
-
       }
+
       "auto ping" - doTwice(new ServerActor(autoPingInterval = 100 millis)){connection =>
         val res1 = connection.listen
         assert(res1.opcode === OpCode.Ping)
@@ -287,12 +294,11 @@ class SocketsTest extends FreeSpec with Eventually{
           // wait for ping and send pong
           val res2 = connection.listen
           assert(res2.opcode === OpCode.Ping)
-          Thread.sleep(200)
           connection send Frame(opcode = OpCode.Pong, data = res2.data, maskingKey = Some(12345))
 
           //new latency should be non zero
           val res3 = connection await Frame(opcode = OpCode.Text, data = ByteString("hello ping"), maskingKey = Some(12345))
-          assert(res3.stringData.toLong > 200)
+          assert(res3.stringData.toLong > 0)
         }
       }
     }

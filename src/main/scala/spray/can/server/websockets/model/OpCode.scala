@@ -19,12 +19,12 @@ object OpCode{
     case 10 => Pong
   }
 
-  object Continuation extends OpCode(0, false)
-  object Text extends OpCode(1, false)
-  object Binary extends OpCode(2, false)
-  object ConnectionClose extends OpCode(8, true)
-  object Ping extends OpCode(9, true)
-  object Pong extends OpCode(10, true)
+  case object Continuation extends OpCode(0, false)
+  case object Text extends OpCode(1, false)
+  case object Binary extends OpCode(2, false)
+  case object ConnectionClose extends OpCode(8, true)
+  case object Ping extends OpCode(9, true)
+  case object Pong extends OpCode(10, true)
 
   val valid = List(Continuation, Text, Binary, ConnectionClose, Ping, Pong)
 }

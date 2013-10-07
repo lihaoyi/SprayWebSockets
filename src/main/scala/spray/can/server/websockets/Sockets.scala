@@ -238,7 +238,7 @@ object SocketClientConnection{
         ConnectionTimeouts(idleTimeout) ? (reapingCycle.isFinite && idleTimeout.isFinite)
     ){case (upgrade: Sockets.Upgrade) =>
       WebsocketFrontEnd(upgrade.frameHandler) >>
-        AutoPingPongs(upgrade.autoPingInterval, upgrade.pingGenerator) >>
+        AutoPingPongs(upgrade.autoPingInterval, upgrade.pingGenerator, upgrade.server) >>
         Consolidation(upgrade.frameSizeLimit, upgrade.server) >>
         FrameParsing(upgrade.frameSizeLimit)
     } >>
@@ -270,7 +270,7 @@ object SocketListener{
         ConnectionTimeouts(idleTimeout) ? (reapingCycle.isFinite && idleTimeout.isFinite)
     ){case (upgrade: Sockets.Upgrade) =>
         WebsocketFrontEnd(upgrade.frameHandler) >>
-          AutoPingPongs(upgrade.autoPingInterval, upgrade.pingGenerator) >>
+          AutoPingPongs(upgrade.autoPingInterval, upgrade.pingGenerator, upgrade.server) >>
           Consolidation(upgrade.frameSizeLimit, upgrade.server) >>
           FrameParsing(upgrade.frameSizeLimit)
     } >>
