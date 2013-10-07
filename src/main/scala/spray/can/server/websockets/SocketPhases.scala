@@ -49,7 +49,7 @@ import SocketPhases.{FrameCommand,FrameEvent}
  *
  * @param handler the actor which will receive the incoming Frames
  */
-case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
+case class WebsocketFrontEnd(handler: ActorRef, filter: Frame => Boolean) extends PipelineStage{
 
   /**
    * Used to let the frameHandler send back unwrapped Frames, which it
@@ -75,8 +75,8 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
       }
 
       val eventPipeline: EPL = {
-        case f @ FrameEvent(e) =>
-          commandPL(Pipeline.Tell(handler, e, receiveAdapter))
+        case f @ FrameEvent(e) if filter(e) =>
+           commandPL(Pipeline.Tell(handler, e, receiveAdapter))
         case Tcp.Closed =>
           commandPL(Pipeline.Tell(handler, Tcp.Closed, receiveAdapter))
         case Sockets.Upgraded => commandPL(Pipeline.Tell(handler, Upgraded, receiveAdapter))
@@ -86,12 +86,27 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
     }
 }
 
+case class AutoPong(maskGen: () => Int) extends PipelineStage{
+  def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
+    new Pipelines {
+
+      val commandPipeline: CPL = {
+        case x => commandPL(x)
+      }
+
+      val eventPipeline: EPL = {
+        case FrameEvent(f @ Frame(true, _, Pong, _, _)) =>
+          eventPL(FrameEvent(f))
+        case x => eventPL(x)
+      }
+    }
+}
 /**
  * This phase automatically performs the pings and matches up the resultant Pongs,
  */
-case class AutoPingPongs(pingInterval: Duration,
-                         pingGenerator: () => Array[Byte],
-                         maskGen: () => Option[Int]) extends PipelineStage{
+case class AutoPing(pingInterval: Duration,
+                    pingGenerator: () => Array[Byte])
+                    extends PipelineStage{
 
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
@@ -118,7 +133,7 @@ case class AutoPingPongs(pingInterval: Duration,
               commandPipeline(FrameCommand(Frame(
                 opcode = OpCode.Ping,
                 data = byteString,
-                maskingKey = maskGen()
+                maskingKey = None
               )))
             case _ =>
           }
@@ -133,9 +148,7 @@ case class AutoPingPongs(pingInterval: Duration,
 
           eventPL(fe)
 
-        case x =>
-
-          eventPL(x)
+        case x => eventPL(x)
       }
     }
 }
@@ -150,7 +163,7 @@ case class AutoPingPongs(pingInterval: Duration,
  * This only handles the stuff the spec says a server *must* handle. Everything
  * else should go on the phases on top of this.
  */
-case class Consolidation(maxMessageLength: Long, maskGen: () => Option[Int]) extends PipelineStage{
+case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) extends PipelineStage{
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
 
@@ -163,26 +176,23 @@ case class Consolidation(maxMessageLength: Long, maskGen: () => Option[Int]) ext
       var lastTick: Deadline = Deadline.now
 
       val eventPipeline: EPL = {
-        case FrameEvent(f @ Frame(_, _, _, frameMask, _)) if frameMask.getClass == maskGen().getClass =>
+        case FrameEvent(f @ Frame(_, _, _, frameMask, _)) if frameMask.getClass == maskGen.getClass =>
           // close connection on malformed frame
           SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Improper masking")
 
         case FrameEvent(f @ Frame(true, _, ConnectionClose, _, _)) =>
-          val newF = f.copy(maskingKey = maskGen())
+          val newF = f.copy(maskingKey = maskGen.map(_()))
           eventPL(FrameEvent(f))
           commandPL(Tcp.Write(ByteString(Frame.write(newF))))
           commandPL(Tcp.Close)
 
         case FrameEvent(f @ Frame(true, _, Ping, _, _)) =>
-          val newF = f.copy(opcode = Pong, maskingKey = maskGen())
+          val newF = f.copy(opcode = Pong, maskingKey = maskGen.map(_()))
           commandPL(Tcp.Write(ByteString(ByteBuffer.wrap(Frame.write(newF)))))
           eventPL(FrameEvent(f))
 
         case FrameEvent(f @ Frame(false, _, _, _, _)) =>
           stored = Some(stored.fold(f)(x => x.copy(data = x.data ++ f.data)))
-
-        case FrameEvent(f @ Frame(true, _, Pong, _, _)) =>
-          eventPL(FrameEvent(f))
 
         case FrameEvent(f @ Frame(true, _, Text | Binary | Continuation, _, _)) =>
           if (stored.map(_.data.length).getOrElse(0) + f.data.length > maxMessageLength){

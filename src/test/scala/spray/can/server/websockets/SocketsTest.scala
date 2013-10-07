@@ -40,7 +40,7 @@ class SocketsTest extends FreeSpec with Eventually{
     def receive = {
       case req: HttpRequest =>
         sender ! Sockets.acceptAllFunction(req)
-        sender ! Sockets.Upgrade(self, autoPingInterval, maxMessageSize)
+        sender ! Sockets.UpgradeServer(self, maxMessageSize, autoPingInterval=autoPingInterval)
 
       case f @ Frame(fin, rsv, Text, maskingKey, data) =>
         count = count + 1
@@ -54,7 +54,7 @@ class SocketsTest extends FreeSpec with Eventually{
     }
   }
 
-  class ClientActor(req: HttpRequest, ssl: Boolean) extends Actor{
+  class ClientActor(ssl: Boolean, filter: Frame => Boolean = Sockets.Filters.hidePingPongs) extends Actor{
     var connection: ActorRef = null
     var commander: ActorRef = null
 
@@ -62,7 +62,7 @@ class SocketsTest extends FreeSpec with Eventually{
     def receive = {
 
       case x: HttpResponse =>
-        connection ! Sockets.Upgrade(self, maskGen = () => Some(31337))
+        connection ! Sockets.UpgradeClient(self, maskGen = () => 31337, filter = filter)
 
       case x: Http.Connected =>
         connection = sender
@@ -90,11 +90,19 @@ class SocketsTest extends FreeSpec with Eventually{
       case x => println("Client Unknown " + x)
     }
   }
+
+  val req = HttpRequest(HttpMethods.GET,  "/mychat", List(
+    HttpHeaders.Host("server.example.com", 80),
+    HttpHeaders.Connection("Upgrade"),
+    HttpHeaders.RawHeader("Sec-WebSocket-Key", "x3JJHMbDL1EzLkh9GBhXDw==")
+  ))
+
   /**
    * Sets up a SocketServer and a IOClientConnection talking to it.
    */
   def setupConnection(port: Int = 10000 + util.Random.nextInt(1000),
                       serverActor: => Actor,
+                      clientActor: Boolean => Actor,
                       ssl: Boolean) = {
     val reqHandler = system.actorOf(Props(serverActor))
 
@@ -107,13 +115,7 @@ class SocketsTest extends FreeSpec with Eventually{
 
     import akka.pattern._
 
-    val req = HttpRequest(HttpMethods.GET,  "/mychat", List(
-      HttpHeaders.Host("server.example.com", 80),
-      HttpHeaders.Connection("Upgrade"),
-      HttpHeaders.RawHeader("Sec-WebSocket-Key", "x3JJHMbDL1EzLkh9GBhXDw==")
-    ))
-
-    val client = TestActorRef(new ClientActor(req, ssl = ssl))
+    val client = TestActorRef(clientActor(ssl))
 
     IO(Sockets).!(Http.Connect("localhost", port, settings=Some(ClientConnectionSettings(system).copy(sslEncryption = ssl))))(client)
 
@@ -128,10 +130,11 @@ class SocketsTest extends FreeSpec with Eventually{
    * Registers the given test twice, with and without SSL.
    */
   def doTwice(serverActor: => Actor = new ServerActor(Int.MaxValue),
+              clientActor: Boolean => Actor = ssl => new ClientActor(ssl = ssl),
               port: Int = 1000 + util.Random.nextInt(10000))
              (test: ActorRef => Unit) = {
-    "basic" in test(setupConnection(port, serverActor, ssl=false))
-    "ssl" in test(setupConnection(port + 1, serverActor, ssl=true))
+    "basic" in test(setupConnection(port, serverActor, clientActor, ssl=false))
+    "ssl" in test(setupConnection(port + 1, serverActor, clientActor, ssl=true))
   }
   import Util.blockActorRef
   "Echo Server Tests" - {
@@ -162,15 +165,14 @@ class SocketsTest extends FreeSpec with Eventually{
       
     }
     "Ping/Pong" - {
-      "simple responses" - doTwice(){ connection =>
-        
+      "simple responses" - doTwice(clientActor = ssl => new ClientActor(ssl = ssl, filter = _ => true)){ connection =>
         val res1 = connection await Frame(opcode = OpCode.Ping, maskingKey = Some(123456), data = "i am cow")
         assert(res1.stringData === "i am cow")
         val res2 = connection await Frame(opcode = OpCode.Ping, maskingKey = Some(123456), data = "i am cow")
         assert(res2.stringData === "i am cow")
-      
       }
-      "responding in middle of fragmented message" - doTwice(){connection =>
+
+      "responding in middle of fragmented message" - doTwice(clientActor = ssl => new ClientActor(ssl = ssl, filter = _ => true)){connection =>
         val result1 = {
           connection send Frame(FIN = false, opcode = OpCode.Text, maskingKey = Some(12345123), data = "i am cow ")
           connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(2139), data = "hear me moo ")
@@ -235,7 +237,7 @@ class SocketsTest extends FreeSpec with Eventually{
     }
     "pinging" - {
 
-      "ping pong" - doTwice(){connection =>
+      "ping pong" - doTwice(clientActor = ssl => new ClientActor(ssl = ssl, filter = _ => true)){connection =>
         val res1 = connection await Frame(opcode = OpCode.Ping, data = ByteString("hello ping"), maskingKey = Some(12345))
         assert(res1.stringData === "hello ping")
         assert(res1.opcode === OpCode.Pong)
@@ -245,7 +247,7 @@ class SocketsTest extends FreeSpec with Eventually{
         assert(res2.opcode === OpCode.Pong)
       }
 
-      "auto ping" - doTwice(new ServerActor(autoPingInterval = 100 millis)){connection =>
+      "auto ping" - doTwice(new ServerActor(autoPingInterval = 100 millis), clientActor = ssl => new ClientActor(ssl = ssl, filter = _ => true)){connection =>
         val res1 = connection.listen
         assert(res1.opcode === OpCode.Ping)
         val res2 = connection.listen

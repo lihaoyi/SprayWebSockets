@@ -10,25 +10,36 @@ import spray.can.server.StatsSupport.StatsHolder
 import spray.io._
 import akka.actor.Terminated
 import scala.concurrent.duration.{FiniteDuration, Duration}
-import spray.can.server.websockets.Sockets.Upgraded
+import spray.can.server.websockets.Sockets.{UpgradeServer, UpgradeClient, Upgraded}
 import akka.io.Tcp
 import java.security.MessageDigest
 import spray.http.HttpHeaders.RawHeader
 import spray.http.HttpResponse
 import spray.http.HttpRequest
 import akka.actor.Terminated
+import spray.can.server.websockets.model.{OpCode, Frame}
 
 /**
  * Sister class to the spray.can.Http class, providing a http server with
  * websocket capabilities
  */
 object Sockets extends ExtensionKey[SocketExt]{
-  case class Upgrade(frameHandler: ActorRef,
-                     autoPingInterval: Duration = Duration.Inf,
-                     frameSizeLimit: Int = Int.MaxValue,
-                     pingGenerator: () => Array[Byte] = () => Array(),
-                     maskGen: () => Option[Int] = () => None) extends Command
+  object Filters{
+    def hidePings(f: Frame) = f.opcode != OpCode.Ping
+    def hidePingPongs(f: Frame) = f.opcode != OpCode.Ping && f.opcode != OpCode.Pong
+  }
 
+
+  case class UpgradeServer(frameHandler: ActorRef,
+                           frameSizeLimit: Int = Int.MaxValue,
+                           filter: Frame => Boolean = Filters.hidePingPongs,
+                           autoPingInterval: Duration = Duration.Inf,
+                           pingGen: () => Array[Byte] = () => Array()) extends Command
+
+  case class UpgradeClient(frameHandler: ActorRef,
+                           frameSizeLimit: Int = Int.MaxValue,
+                           filter: Frame => Boolean = Filters.hidePingPongs,
+                           maskGen: () => Int) extends Command
   /**
    * Sent by Sockets whenever an incoming Pong matches an
    * outgoing Ping, providing the FrameHandler with the round-trip
@@ -222,85 +233,3 @@ class SocketManager(httpSettings: HttpExt#Settings) extends HttpManager(httpSett
   }
 }
 
-private[can] class SocketClientSettingsGroup(settings: ClientConnectionSettings,
-                                           httpSettings: HttpExt#Settings) extends HttpClientSettingsGroup(settings, httpSettings){
-
-  override val pipelineStage = SocketClientConnection.pipelineStage(settings)
-}
-object SocketClientConnection{
-  def pipelineStage(settings: ClientConnectionSettings): RawPipelineStage[SslTlsContext] = {
-    import settings._
-    Switching(
-      ClientFrontend(requestTimeout) >>
-        ResponseChunkAggregation(responseChunkAggregationLimit) ? (responseChunkAggregationLimit > 0) >>
-        ResponseParsing(parserSettings) >>
-        RequestRendering(settings) >>
-        ConnectionTimeouts(idleTimeout) ? (reapingCycle.isFinite && idleTimeout.isFinite)
-    ){case (upgrade: Sockets.Upgrade) =>
-      WebsocketFrontEnd(upgrade.frameHandler) >>
-        AutoPingPongs(upgrade.autoPingInterval, upgrade.pingGenerator, upgrade.maskGen) >>
-        Consolidation(upgrade.frameSizeLimit, upgrade.maskGen) >>
-        FrameParsing(upgrade.frameSizeLimit)
-    } >>
-      SslTlsSupport ? sslEncryption >>
-      TickGenerator(reapingCycle) ? (idleTimeout.isFinite || requestTimeout.isFinite)
-  }
-}
-/**
- * Sister class to HttpListener, but with a pipeline that supports websockets
- */
-class SocketListener(bindCommander: ActorRef,
-                     bind: Http.Bind,
-                     httpSettings: HttpExt#Settings) extends HttpListener(bindCommander, bind, httpSettings){
-
-  override val pipelineStage = SocketListener.pipelineStage(settings, statsHolder)
-}
-object SocketListener{
-
-  def pipelineStage(settings: ServerSettings, statsHolder: Option[StatsHolder]) = {
-    import settings._
-    Switching(
-      ServerFrontend(settings) >>
-        RequestChunkAggregation(requestChunkAggregationLimit) ? (requestChunkAggregationLimit > 0) >>
-        PipeliningLimiter(pipeliningLimit) ? (pipeliningLimit > 0) >>
-        StatsSupport(statsHolder.get) ? statsSupport >>
-        RemoteAddressHeaderSupport ? remoteAddressHeader >>
-        RequestParsing(settings) >>
-        ResponseRendering(settings) >>
-        ConnectionTimeouts(idleTimeout) ? (reapingCycle.isFinite && idleTimeout.isFinite)
-    ){case (upgrade: Sockets.Upgrade) =>
-        WebsocketFrontEnd(upgrade.frameHandler) >>
-          AutoPingPongs(upgrade.autoPingInterval, upgrade.pingGenerator, upgrade.maskGen) >>
-          Consolidation(upgrade.frameSizeLimit, upgrade.maskGen) >>
-          FrameParsing(upgrade.frameSizeLimit)
-    } >>
-      SslTlsSupport ? sslEncryption >>
-      TickGenerator(reapingCycle) ? (reapingCycle.isFinite && (idleTimeout.isFinite || requestTimeout.isFinite))
-  }
-
-}
-case class Switching[T <: PipelineContext](stage1: RawPipelineStage[T])
-                       (stage2: PartialFunction[Tcp.Command, RawPipelineStage[T]])
-                        extends RawPipelineStage[T] {
-
-  def apply(context: T, commandPL: CPL, eventPL: EPL): Pipelines =
-    new Pipelines {
-      val pl1 = stage1(context, commandPL, eventPL)
-
-      var eventPLVar = pl1.eventPipeline
-      var commandPLVar = pl1.commandPipeline
-
-      // it is important to introduce the proxy to the var here
-      def commandPipeline: CPL = {
-        case x if stage2.isDefinedAt(x) =>
-          val pl2 = stage2(x)(context, commandPL, eventPL)
-          eventPLVar = pl2.eventPipeline
-          commandPLVar = pl2.commandPipeline
-          eventPLVar(Upgraded)
-        case c => commandPLVar(c)
-      }
-      def eventPipeline: EPL = {
-        e => eventPLVar(e)
-      }
-    }
-}
