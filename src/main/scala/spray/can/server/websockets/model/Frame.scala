@@ -29,59 +29,64 @@ object Frame{
   case class Successful(frame: Frame) extends ParsedFrame
   case object Incomplete extends ParsedFrame
   case object TooLarge extends ParsedFrame
-  def read(in: ByteBuffer, maxMessageLength: Long = Long.MaxValue): ParsedFrame = {
+  def read(in0: ByteString, maxMessageLength: Long = Long.MaxValue): (ParsedFrame, ByteString) = {
+    try{
+      val in = in0.toByteBuffer
+      in.mark()
+      if (in.remaining() < 2) {
+        in.reset()
+        return Incomplete -> in0
+      }
+      val b0 = in.get
+      val FIN = ((b0 >> 7) & 1) != 0
 
-    in.mark()
-    if (in.remaining() < 2) {
-      in.reset()
-      return Incomplete
-    }
-    val b0 = in.get
-    val FIN = ((b0 >> 7) & 1) != 0
+      val RSV = (
+        ((b0 >> 6) & 1) != 0,
+        ((b0 >> 5) & 1) != 0,
+        ((b0 >> 4) & 1) != 0
+      )
+      val opcode = OpCode(b0 & 0xf)
 
-    val RSV = (
-      ((b0 >> 6) & 1) != 0,
-      ((b0 >> 5) & 1) != 0,
-      ((b0 >> 4) & 1) != 0
-    )
-    val opcode = OpCode(b0 & 0xf)
+      val b1 = in.get
+      val mask = (b1 >> 7) & 1
+      val payloadLength = (b1 & 127) match{
+        case 126 =>
+          if (in.remaining() < 2) {
+            in.reset()
+            return Incomplete -> in0
+          }
+          in.getShort & 0xffff
+        case 127 =>
+          if (in.remaining() < 4) {
+            in.reset()
+            return Incomplete -> in0
+          }
+          in.getLong
+        case x => x
+      }
+      val maskingKey = if (mask != 0) Some(in.getInt) else None
 
-    val b1 = in.get
-    val mask = (b1 >> 7) & 1
-    val payloadLength = (b1 & 127) match{
-      case 126 =>
-        if (in.remaining() < 2) {
-          in.reset()
-          return Incomplete
-        }
-        in.getShort & 0xffff
-      case 127 =>
-        if (in.remaining() < 4) {
-          in.reset()
-          return Incomplete
-        }
-        in.getLong
-      case x => x
-    }
-    val maskingKey = if (mask != 0) Some(in.getInt) else None
+      if (payloadLength > maxMessageLength) {
+        TooLarge -> in0
+      } else if (in.remaining() < payloadLength) {
+        Incomplete -> in0
+      } else {
+        val data = new Array[Byte](payloadLength.toInt)
+        in.get(data)
+        for(m <- maskingKey) maskArray(data, m)
 
-    if (payloadLength > maxMessageLength) {
-      in.reset()
-      TooLarge
-    } else if (in.remaining() < payloadLength) {
-      in.reset()
-      Incomplete
-    } else Successful{
-      val data = new Array[Byte](payloadLength.toInt)
-      in.get(data)
+        val frame = Frame(FIN, RSV, opcode, maskingKey, ByteString(data))
+        Successful(frame) -> ByteString(in)
+      }
 
-      for(m <- maskingKey) maskArray(data, m)
-
-      Frame(FIN, RSV, opcode, maskingKey, ByteString(data))
+    }catch{case e: Exception =>
+      println("PARSING EXCEPTION")
+      println(in0)
+      throw e
     }
   }
 
-  def write(f: Frame): Array[Byte] = {
+  def write(f: Frame): ByteString = {
     import f._
     val byteOutStream = new ByteArrayOutputStream()
     val out = new DataOutputStream(byteOutStream)
@@ -115,7 +120,7 @@ object Frame{
     val array = data.toArray
     for(m <- maskingKey) maskArray(array, m)
     out.write(array)
-    byteOutStream.toByteArray
+    ByteString(byteOutStream.toByteArray)
   }
 
 

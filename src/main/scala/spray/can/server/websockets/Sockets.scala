@@ -89,7 +89,7 @@ object Sockets extends ExtensionKey[SocketExt]{
 
   def socketAcceptHeaders(returnValue: String) = List(
     HttpHeaders.RawHeader("Upgrade", "websocket"),
-    HttpHeaders.RawHeader("Connection", "Upgrade"),
+    HttpHeaders.Connection("Upgrade"),
     HttpHeaders.RawHeader("Sec-WebSocket-Accept", returnValue)
   )
 

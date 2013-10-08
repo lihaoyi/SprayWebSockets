@@ -23,7 +23,8 @@ object Build extends sbt.Build{
         "io.spray"            %   "spray-testkit" % "1.2-M8" % "test",
         "com.typesafe.akka"   %%  "akka-actor"    % "2.2.0-RC1",
         "com.typesafe.akka"   %%  "akka-testkit"  % "2.2.0-RC1" % "test",
-        "org.scalatest" % "scalatest_2.10" % "2.0.RC1" % "test"
+        "org.scalatest" % "scalatest_2.10" % "2.0.RC1" % "test",
+        "org.java-websocket" % "Java-WebSocket" % "1.3.0"
       )
     )
   )
