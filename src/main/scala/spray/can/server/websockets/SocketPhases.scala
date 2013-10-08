@@ -26,7 +26,6 @@ object SocketPhases{
    * - Sends a message to kill the IOConnection
    */
   def close(commandPL : Pipeline[Command], closeCode: Short, message: String) = {
-    println("SocketPhases.close " + message)
     val closeFrame = Frame(opcode = ConnectionClose, data = ByteString(closeCode))
     commandPL(Tcp.Write(Frame.write(closeFrame)))
     commandPL(Tcp.Close)
@@ -194,13 +193,15 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
 
         case FrameEvent(f @ Frame(true, (false, false, false), Ping | Pong | ConnectionClose, _, data))
           if data.length > 125 =>
-          SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Control frames too large: " + data.length)
+          commandPL(Tcp.Close)
+          //SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Control frames too large: " + data.length)
 
         // handle close requests
         case FrameEvent(f @ Frame(true, (false, false, false), ConnectionClose, _, data)) =>
           if (data.length == 1 || data.length > 2 && !CloseCode.statusCodes.contains(data.toByteBuffer.getShort)) {
             SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Received illegal close code")
           }else{
+
             SocketPhases.close(commandPL, CloseCode.NormalClosure.statusCode, "Closing connection")
           }
 
@@ -222,8 +223,9 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
 
         // combine completed data frames
         case FrameEvent(f @ Frame(true, (false, false, false), Continuation | Text | Binary, _, _)) =>
-
-          if (stored.map(_.data.length).getOrElse(0) + f.data.length > maxMessageLength){
+          if (f.opcode == Continuation && stored.isEmpty || f.opcode != Continuation && stored.isDefined){
+            commandPL(Tcp.Close)
+          }else if (stored.map(_.data.length).getOrElse(0) + f.data.length > maxMessageLength){
             // close connection on oversized packet
             SocketPhases.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
           }else{
@@ -233,7 +235,6 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
                 Charset.forName("UTF-8").newDecoder().decode(result.data.toByteBuffer)
                 eventPL(FrameEvent(result.copy(FIN=true, data = result.data.compact)))
               }catch{ case e: CharacterCodingException =>
-                println("Malformed Text Frame")
                 SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Malformed Text Frame")
               }
             }else{
