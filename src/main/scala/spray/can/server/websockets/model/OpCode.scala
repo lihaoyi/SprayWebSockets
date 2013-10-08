@@ -31,7 +31,11 @@ object OpCode{
 
 
 class CloseCode(val statusCode: Short){
-  def toByteString = CloseCode.serializeCloseCode(statusCode)
+  def toByteString = {
+    val b = ByteBuffer.allocate(2)
+    b.putShort(statusCode)
+    ByteString(b.array())
+  }
 }
 
 /**
@@ -40,15 +44,6 @@ class CloseCode(val statusCode: Short){
  * http://tools.ietf.org/html/rfc6455
  */
 object CloseCode{
-  /**
-   * Converts a short into a bytestring to be used in the
-   * CloseConnection frames.
-   */
-  def serializeCloseCode(code: Short) = ByteString(
-    ByteBuffer.allocate(2)
-      .putShort(code)
-      .rewind().asInstanceOf[ByteBuffer]
-  )
 
   object NormalClosure extends CloseCode(1000)
   object GoingAway extends CloseCode(1001)

@@ -160,7 +160,7 @@ class SocketsTest extends FreeSpec with Eventually{
       val result2 = {
         connection send Frame(FIN = false, opcode = OpCode.Text, maskingKey = Some(12345123), data = "yoghurt curds cream cheese and butter ")
         connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(2139), data = "comes from liquids from my udder ")
-        connection await Frame(opcode = OpCode.Text, maskingKey = Some(-23), data = "i am cow, i am cow, hear me moooo ")
+        connection await Frame(opcode = OpCode.Continuation, maskingKey = Some(-23), data = "i am cow, i am cow, hear me moooo ")
       }
       assert(result2.stringData === "YOGHURT CURDS CREAM CHEESE AND BUTTER COMES FROM LIQUIDS FROM MY UDDER I AM COW, I AM COW, HEAR ME MOOOO 2")
       
@@ -175,7 +175,7 @@ class SocketsTest extends FreeSpec with Eventually{
 
       }
       "The server MUST close the connection upon receiving a frame that is not masked" - doTwice(){ connection =>
-        val res1 = connection await Frame(opcode = OpCode.Text, data = ByteString("lol"))
+        val res1 = connection await Frame(opcode = OpCode.Text, data = ByteString(1000 toShort))
         assert(res1.opcode === OpCode.ConnectionClose)
         assert(res1.data.asByteBuffer.getShort === CloseCode.ProtocolError.statusCode)
 

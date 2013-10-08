@@ -20,7 +20,7 @@ import org.java_websocket.handshake.ClientHandshake
 
 class AutoBahn extends FreeSpec with Eventually{
 
-  /*"Server" in {
+  "Server" in {
     implicit val system = ActorSystem()
     implicit val ec = system.dispatcher
     implicit val patienceConfig = PatienceConfig(timeout = 2 seconds)
@@ -55,13 +55,13 @@ class AutoBahn extends FreeSpec with Eventually{
     IO(Sockets) ! Http.Bind(
       server,
       "192.168.1.4",
-      9001,
-      settings=Some(ServerSettings(system).copy(sslEncryption = true))
+      9001/*,
+      settings=Some(ServerSettings(system).copy(sslEncryption = true))*/
     )
 
     Thread.sleep(100000000000000000L)
-  }*/
-  "Client" in {
+  }
+  /*"Client" in {
     implicit val system = ActorSystem()
     implicit val patienceConfig = PatienceConfig(timeout = 2 seconds)
     // Hard-code the websocket request
@@ -104,5 +104,5 @@ class AutoBahn extends FreeSpec with Eventually{
 
 
     Thread.sleep(100000000000000000L)
-  }
+  }*/
 }
