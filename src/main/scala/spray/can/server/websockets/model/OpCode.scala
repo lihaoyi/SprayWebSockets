@@ -63,4 +63,18 @@ object CloseCode{
   object MandatoryExt extends CloseCode(1010)
   object InternalServerError extends CloseCode(1011)
   object TlsHandshake extends CloseCode(1015)
+  val statusCodes = Seq(
+    NormalClosure,
+    GoingAway,
+    ProtocolError,
+    UnsupportedData,
+    NoStatusReceived,
+    AbnormalClosure,
+    InvalidFramePayloadData,
+    PolicyViolation,
+    MessageTooBig,
+    MandatoryExt,
+    InternalServerError,
+    TlsHandshake
+  ).map(_.statusCode)
 }

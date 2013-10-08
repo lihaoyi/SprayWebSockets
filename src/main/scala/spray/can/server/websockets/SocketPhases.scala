@@ -27,7 +27,7 @@ object SocketPhases{
    */
   def close(commandPL : Pipeline[Command], closeCode: Short, message: String) = {
     println("SocketPhases.close " + message)
-    val closeFrame = Frame(opcode = ConnectionClose, data = CloseCode.serializeCloseCode(closeCode))
+    val closeFrame = Frame(opcode = ConnectionClose, data = ByteString(closeCode))
     commandPL(Tcp.Write(Frame.write(closeFrame)))
     commandPL(Tcp.Close)
   }
@@ -189,21 +189,26 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
       var lastTick: Deadline = Deadline.now
 
       val eventPipeline: EPL = {
-        // close connection on malformed frame
         case FrameEvent(f @ Frame(_, (false, false, false), _, frameMask, _)) if frameMask.getClass == maskGen.getClass =>
           SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Improper masking")
 
+        case FrameEvent(f @ Frame(true, (false, false, false), Ping | Pong | ConnectionClose, _, data))
+          if data.length > 125 =>
+          SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Control frames too large: " + data.length)
+
         // handle close requests
-        case FrameEvent(f @ Frame(true, (false, false, false), ConnectionClose, _, _)) =>
-          val newF = f.copy(maskingKey = maskGen.map(_()))
-          commandPL(Tcp.Write(Frame.write(newF)))
-          eventPL(FrameEvent(f))
-          commandPL(Tcp.Close)
+        case FrameEvent(f @ Frame(true, (false, false, false), ConnectionClose, _, data)) =>
+          if (data.length == 1 || data.length > 2 && !CloseCode.statusCodes.contains(data.toByteBuffer.getShort)) {
+            SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Received illegal close code")
+          }else{
+            SocketPhases.close(commandPL, CloseCode.NormalClosure.statusCode, "Closing connection")
+          }
 
         // forward pings and pongs directly
-        case FrameEvent(f @ Frame(true, (false, false, false), Ping | Pong, _, data))
-          if data.length <= 125 =>
+        case FrameEvent(f @ Frame(true, (false, false, false), Ping | Pong, _, data)) =>
           eventPL(FrameEvent(f))
+
+
 
         // begin fragmented frame
         case FrameEvent(f @ Frame(false, (false, false, false), Text | Binary, _, _))
@@ -217,7 +222,7 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
 
         // combine completed data frames
         case FrameEvent(f @ Frame(true, (false, false, false), Continuation | Text | Binary, _, _)) =>
-          println("Incoming Frame! " + f)
+
           if (stored.map(_.data.length).getOrElse(0) + f.data.length > maxMessageLength){
             // close connection on oversized packet
             SocketPhases.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
@@ -229,7 +234,7 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
                 eventPL(FrameEvent(result.copy(FIN=true, data = result.data.compact)))
               }catch{ case e: CharacterCodingException =>
                 println("Malformed Text Frame")
-                commandPL(Tcp.Close)
+                SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Malformed Text Frame")
               }
             }else{
               eventPL(FrameEvent(result.copy(FIN=true, data = result.data.compact)))
@@ -270,7 +275,6 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
           var success = true
 
           do{
-            println("Reading " + streamBuffer)
             model.Frame.read(streamBuffer, maxMessageLength) match{
               case Successful(frame, newBuffer) =>
                 eventPL(FrameEvent(frame))
