@@ -168,7 +168,9 @@ class SocketsTest extends FreeSpec with Eventually{
 
     "Closing Tests" - {
       "Clean Close" - doTwice(){ connection =>
+        println("Sending one frame")
         val res1 = connection await Frame(opcode = OpCode.ConnectionClose, maskingKey = Some(0))
+        println("Frame sent and reply received")
         assert(res1.opcode === OpCode.ConnectionClose)
 
       }
@@ -206,7 +208,6 @@ class SocketsTest extends FreeSpec with Eventually{
           connection send Frame(FIN = false, opcode = OpCode.Continuation, data = ByteString("l" * 256), maskingKey = Some(0))
           val res2 = connection await Frame(opcode = OpCode.Continuation, data = ByteString("l" * 256), maskingKey = Some(0))
           assert(res2.data.asByteBuffer.getShort === CloseCode.MessageTooBig.statusCode)
-
         }
       }
     }

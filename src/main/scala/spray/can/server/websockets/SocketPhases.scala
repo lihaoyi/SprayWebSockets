@@ -25,8 +25,9 @@ object SocketPhases{
    * - Sends a message to kill the IOConnection
    */
   def close(commandPL : Pipeline[Command], closeCode: Short, message: String) = {
+    println("SocketPhases.close " + message)
     val closeFrame = Frame(opcode = ConnectionClose, data = CloseCode.serializeCloseCode(closeCode))
-    commandPL(Tcp.Write(ByteString(Frame.write(closeFrame))))
+    commandPL(Tcp.Write(Frame.write(closeFrame)))
     commandPL(Tcp.Close)
   }
   /**
@@ -97,7 +98,7 @@ case class AutoPong(maskGen: () => Int) extends PipelineStage{
       val eventPipeline: EPL = {
         case FrameEvent(f @ Frame(true, _, Ping, _, _)) =>
           val newF = f.copy(opcode = Pong, maskingKey = Some(maskGen()))
-          commandPL(Tcp.Write(ByteString(ByteBuffer.wrap(Frame.write(newF)))))
+          commandPL(Tcp.Write(Frame.write(newF)))
 
         case x => eventPL(x)
       }
@@ -189,15 +190,16 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
       val eventPipeline: EPL = {
         // close connection on malformed frame
         case FrameEvent(f @ Frame(_, _, _, frameMask, _)) if frameMask.getClass == maskGen.getClass =>
-
           SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Improper masking")
 
         // handle close requests
         case FrameEvent(f @ Frame(true, _, ConnectionClose, _, _)) =>
+          println("Close Received")
           val newF = f.copy(maskingKey = maskGen.map(_()))
-          commandPL(Tcp.Write(ByteString(Frame.write(newF))))
-          //eventPL(FrameEvent(f))
-          //commandPL(Tcp.Close)
+          println("Close Sent")
+          commandPL(Tcp.Write(Frame.write(newF)))
+          eventPL(FrameEvent(f))
+          commandPL(Tcp.Close)
 
         // forward pings and pongs directly
         case FrameEvent(f @ Frame(true, _, Ping | Pong, _, _)) =>
@@ -238,35 +240,39 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
       var streamBuffer: ByteString = ByteString()
       val commandPipeline: CPL = {
         case f: FrameCommand =>
-          val bytes = ByteString(Frame.write(f.frame))
-
-          commandPL(Tcp.Write(bytes))
+          commandPL(Tcp.Write(Frame.write(f.frame)))
         case x =>
           commandPL(x)
       }
 
       val eventPipeline: EPL = {
         case Tcp.Received(data) =>
+          println()
+          println("Entering Parsing")
+          println(streamBuffer)
+          println(data)
           streamBuffer = streamBuffer ++ data
 
-          val buffer = streamBuffer.asByteBuffer
           var success = true
+
           do{
-            success = model.Frame.read(buffer, maxMessageLength) match{
-              case Successful(frame) =>
+            println("Parsing " + streamBuffer)
+            model.Frame.read(streamBuffer, maxMessageLength) match{
+              case (Successful(frame), newBuffer) =>
                 eventPL(FrameEvent(frame))
-                true
-              case Incomplete =>
-                false
-              case TooLarge =>
+                success = true
+                streamBuffer = newBuffer
+                println("Post Parse " + streamBuffer)
+              case (Incomplete, _) =>
+                success = false
+              case (TooLarge, _) =>
                 SocketPhases.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
-                false
+                success = false
             }
           }while(success)
-          streamBuffer = ByteString(buffer)
-
 
         case x =>
+          println("XXX " + x)
           eventPL(x)
       }
     }
