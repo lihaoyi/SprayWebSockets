@@ -6,7 +6,7 @@ import akka.io.{Tcp, IO}
 import spray.can.Http
 import akka.actor.{Props, ActorSystem, Actor}
 import spray.can.server.websockets.model.{OpCode, Frame}
-import spray.can.server.websockets.model.OpCode.Text
+import spray.can.server.websockets.model.OpCode.{Binary, Text}
 import akka.util.ByteString
 import spray.http.{HttpResponse, HttpHeaders, HttpMethods, HttpRequest}
 import akka.io.Tcp.Register
@@ -39,7 +39,7 @@ class AutoBahn extends FreeSpec with Eventually{
           sender ! Register(self) // normal Http server init
 
         case req: HttpRequest =>
-          println("Request" + req)
+          println("Request")
           // Upgrade the connection to websockets if you think the incoming
           // request looks good
           if (true){
@@ -51,8 +51,8 @@ class AutoBahn extends FreeSpec with Eventually{
           println("Upgraded!")
           // do nothing
 
-        case f @ Frame(fin, rsv, opcode, maskingKey, data) =>
-          println("Got Frame " + opcode)
+        case f @ Frame(fin, rsv, Text | Binary, maskingKey, data) =>
+          println("Got Frame " + f.opcode)
           // Reply to frames with the text content capitalized
 
           sender ! f.copy(maskingKey = None)

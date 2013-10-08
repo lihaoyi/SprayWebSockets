@@ -44,7 +44,7 @@ object Sockets extends ExtensionKey[SocketExt]{
   object UpgradeServer{
     def apply(frameHandler: ActorRef,
               frameSizeLimit: Int = Int.MaxValue)
-             (implicit extraStages: ServerPipelineStage = EmptyPipelineStage) = {
+             (implicit extraStages: ServerPipelineStage = AutoPong(None)) = {
       new UpgradeServer(
         WebsocketFrontEnd(frameHandler) >>
         extraStages >>
@@ -57,7 +57,7 @@ object Sockets extends ExtensionKey[SocketExt]{
     def apply(frameHandler: ActorRef,
               frameSizeLimit: Int = Int.MaxValue,
               maskGen: () => Int = () => util.Random.nextInt())
-             (implicit extraStages: ClientPipelineStage = AutoPong(maskGen)) ={
+             (implicit extraStages: ClientPipelineStage = AutoPong(Some(maskGen))) ={
       new UpgradeClient(
         WebsocketFrontEnd(frameHandler) >>
         extraStages >>

@@ -1,7 +1,7 @@
 package spray.can.server
 package websockets
 import model._
-import model.Frame.{TooLarge, Incomplete, Successful}
+import spray.can.server.websockets.model.Frame.{Invalid, TooLarge, Incomplete, Successful}
 import OpCode._
 import spray.io._
 import java.nio.ByteBuffer
@@ -13,6 +13,7 @@ import akka.actor.{Props, Actor, ActorRef}
 import spray.can.server.websockets.Sockets.Upgraded
 import concurrent.duration.{FiniteDuration, Duration, Deadline}
 import akka.io.Tcp
+import java.nio.charset.{CharacterCodingException, Charset}
 
 /**
  * Stores handy socket pipeline related stuff
@@ -87,7 +88,7 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
     }
 }
 
-case class AutoPong(maskGen: () => Int) extends PipelineStage{
+case class AutoPong(maskGen: Option[() => Int]) extends PipelineStage{
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
 
@@ -97,7 +98,7 @@ case class AutoPong(maskGen: () => Int) extends PipelineStage{
 
       val eventPipeline: EPL = {
         case FrameEvent(f @ Frame(true, _, Ping, _, _)) =>
-          val newF = f.copy(opcode = Pong, maskingKey = Some(maskGen()))
+          val newF = f.copy(opcode = Pong, maskingKey = maskGen.map(_()))
           commandPL(Tcp.Write(Frame.write(newF)))
 
         case x => eventPL(x)
@@ -189,40 +190,57 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
 
       val eventPipeline: EPL = {
         // close connection on malformed frame
-        case FrameEvent(f @ Frame(_, _, _, frameMask, _)) if frameMask.getClass == maskGen.getClass =>
+        case FrameEvent(f @ Frame(_, (false, false, false), _, frameMask, _)) if frameMask.getClass == maskGen.getClass =>
           SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Improper masking")
 
         // handle close requests
-        case FrameEvent(f @ Frame(true, _, ConnectionClose, _, _)) =>
-          println("Close Received")
+        case FrameEvent(f @ Frame(true, (false, false, false), ConnectionClose, _, _)) =>
           val newF = f.copy(maskingKey = maskGen.map(_()))
-          println("Close Sent")
           commandPL(Tcp.Write(Frame.write(newF)))
           eventPL(FrameEvent(f))
           commandPL(Tcp.Close)
 
         // forward pings and pongs directly
-        case FrameEvent(f @ Frame(true, _, Ping | Pong, _, _)) =>
+        case FrameEvent(f @ Frame(true, (false, false, false), Ping | Pong, _, data))
+          if data.length <= 125 =>
           eventPL(FrameEvent(f))
 
-        // aggregate fragmented data frames
-        case FrameEvent(f @ Frame(false, _, _, _, _)) =>
-          stored = Some(stored.fold(f)(x => x.copy(data = x.data ++ f.data)))
+        // begin fragmented frame
+        case FrameEvent(f @ Frame(false, (false, false, false), Text | Binary, _, _))
+          if stored.isEmpty =>
+          stored = Some(f)
 
+        // aggregate fragmented data frames
+        case FrameEvent(f @ Frame(false, (false, false, false), Continuation, _, _))
+          if stored.isDefined =>
+          stored = Some(stored.get.copy(data = stored.get.data ++ f.data))
 
         // combine completed data frames
-        case FrameEvent(f @ Frame(true, _, Text | Binary | Continuation, _, _)) =>
+        case FrameEvent(f @ Frame(true, (false, false, false), Continuation | Text | Binary, _, _)) =>
+          println("Incoming Frame! " + f)
           if (stored.map(_.data.length).getOrElse(0) + f.data.length > maxMessageLength){
             // close connection on oversized packet
             SocketPhases.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
           }else{
-            stored = Some(stored.fold(f)(x => x.copy(data = x.data ++ f.data)))
-            eventPL(FrameEvent(stored.get.copy(FIN=true, data = stored.get.data.compact)))
+            val result = stored.fold(f)(x => x.copy(data = x.data ++ f.data))
+            if (result.opcode == OpCode.Text) {
+              try{
+                Charset.forName("UTF-8").newDecoder().decode(result.data.toByteBuffer)
+                eventPL(FrameEvent(result.copy(FIN=true, data = result.data.compact)))
+              }catch{ case e: CharacterCodingException =>
+                println("Malformed Text Frame")
+                commandPL(Tcp.Close)
+              }
+            }else{
+              eventPL(FrameEvent(result.copy(FIN=true, data = result.data.compact)))
+            }
+
+
             stored = None
           }
 
-        case msg =>
-          eventPL(msg)
+        case FrameEvent(f) => commandPL(Tcp.Close)
+        case msg => eventPL(msg)
       }
     }
 }
@@ -247,33 +265,30 @@ case class FrameParsing(maxMessageLength: Long) extends PipelineStage {
 
       val eventPipeline: EPL = {
         case Tcp.Received(data) =>
-          println()
-          println("Entering Parsing")
-          println(streamBuffer)
-          println(data)
           streamBuffer = streamBuffer ++ data
 
           var success = true
 
           do{
-            println("Parsing " + streamBuffer)
+            println("Reading " + streamBuffer)
             model.Frame.read(streamBuffer, maxMessageLength) match{
-              case (Successful(frame), newBuffer) =>
+              case Successful(frame, newBuffer) =>
                 eventPL(FrameEvent(frame))
                 success = true
                 streamBuffer = newBuffer
-                println("Post Parse " + streamBuffer)
-              case (Incomplete, _) =>
+              case Incomplete =>
                 success = false
-              case (TooLarge, _) =>
+              case TooLarge =>
                 SocketPhases.close(commandPL, CloseCode.MessageTooBig.statusCode, "Message exceeds maximum size of " + maxMessageLength)
                 success = false
+              case Invalid =>
+                commandPL(Tcp.Close)
+                success = false
+
             }
           }while(success)
 
-        case x =>
-          println("XXX " + x)
-          eventPL(x)
+        case x => eventPL(x)
       }
     }
 }

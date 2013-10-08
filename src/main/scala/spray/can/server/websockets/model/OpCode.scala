@@ -10,7 +10,7 @@ class OpCode(val value: Byte, val isControl: Boolean)
  * http://tools.ietf.org/html/rfc6455
  */
 object OpCode{
-  def apply(n: Int) = n match{
+  def find: PartialFunction[Int, OpCode] = {
     case 0 => Continuation
     case 1 => Text
     case 2 => Binary
