@@ -7,7 +7,7 @@ import java.io.{OutputStream, InputStream}
 /**
  * A very fast circular, growable read-write byte buffer.
  */
-class UberBuffer(initSize: Int = 1024){ self =>
+class UberBuffer(initSize: Int = 32){ self =>
   var data = new Array[Byte](initSize)
   var readPos = 0
   var writePos = 0
@@ -15,8 +15,19 @@ class UberBuffer(initSize: Int = 1024){ self =>
   def capacity = data.length
   object inputStream extends InputStream{
     var mark = 0
-    def read(): Int = readByte().toInt
-    override def available() = readAvailable
+    def read(): Int = {
+      println(readPos + " " + writePos + " " + data.toList)
+      println("Available " + readAvailable)
+      val x = self.read().toInt
+      println("Available " + readAvailable)
+      if (x < 0) x + 256 else x
+    }
+    override def available() = {
+      val x = readAvailable
+      println("Available " + readAvailable)
+      println(readPos + " " + writePos + " " + data.toList)
+      x
+    }
     override def read(b: Array[Byte], offset: Int, length: Int) = readTo(b, offset, length)
     override def skip(n: Long) = {
       readPos = incr(readPos, n)
@@ -50,13 +61,13 @@ class UberBuffer(initSize: Int = 1024){ self =>
       // - - - - -
       //   r   W
       //       R
-      writePos - readPos + 1
+      writePos - readPos
     } else {
       // 3 4   1 2
       // - - - - -
       //   W   r
       //   Rs
-      data.length - readPos + writePos + 1
+      data.length - readPos + writePos
     }
   }
   def writeAvailable = {

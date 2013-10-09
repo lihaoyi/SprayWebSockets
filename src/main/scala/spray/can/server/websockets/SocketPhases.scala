@@ -4,7 +4,6 @@ import model._
 import spray.can.server.websockets.model.Frame.{Invalid, TooLarge, Incomplete, Successful}
 import OpCode._
 import spray.io._
-import java.nio.{BufferUnderflowException, ByteBuffer}
 import spray.io.TickGenerator.Tick
 
 import akka.util.ByteString
@@ -13,8 +12,7 @@ import akka.actor.{Props, Actor, ActorRef}
 import spray.can.server.websockets.Sockets.Upgraded
 import concurrent.duration.{FiniteDuration, Duration, Deadline}
 import akka.io.Tcp
-import java.nio.charset.{CodingErrorAction, CharacterCodingException, Charset}
-import java.io.{ObjectInputStream, ByteArrayOutputStream}
+import java.nio.charset.CharacterCodingException
 
 /**
  * Stores handy socket pipeline related stuff
@@ -305,8 +303,6 @@ case class FrameParsing(maxMessageLength: Int) extends PipelineStage {
                 success = false
             }
           }
-
-
 
         case x => eventPL(x)
       }

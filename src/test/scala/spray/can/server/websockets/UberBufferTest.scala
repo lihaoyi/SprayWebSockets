@@ -36,8 +36,7 @@ class UberBufferTest extends FreeSpec{
       bufferSize <- Seq(1, 41, 129, 1234)
       inputSize <- Seq(123, 412, 12239, 1234151)
     }{
-//      println("bufferSize " + bufferSize)
-//      println("inputSize " + inputSize)
+
       val buf = new UberBuffer(bufferSize)
       val data = new Array[Byte](inputSize)
       val out = new Array[Byte](inputSize)
@@ -48,15 +47,15 @@ class UberBufferTest extends FreeSpec{
 
       while (currentRead < data.length){
         {
+
           val incr = math.min(scala.util.Random.nextInt(100), data.length-currentWrite)
           buf.write(ByteString.fromArray(data, currentWrite, incr))
           currentWrite += incr
         }
-        if (buf.readAvailable > 0){
-          val incr = math.min(scala.util.Random.nextInt(buf.readAvailable), data.length-currentRead)
-          buf.readTo(out, currentRead, incr)
-          currentRead += incr
-        }
+
+        val incr = math.min(scala.util.Random.nextInt(buf.readAvailable + 1), data.length-currentRead + 1)
+        buf.readTo(out, currentRead, incr)
+        currentRead += incr
       }
 
       assert(ByteString(out) == ByteString(data))
