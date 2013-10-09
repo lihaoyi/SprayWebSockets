@@ -1,7 +1,7 @@
 package spray.can.server.websockets.model
 
 import java.nio.ByteBuffer
-import java.io.{DataOutputStream, ByteArrayOutputStream}
+import java.io._
 import akka.util.ByteString
 import spray.io._
 import scala.Some
@@ -9,6 +9,7 @@ import scala.Some
 import scala.Some
 import spray.can.server.websockets.model.OpCode.{Ping, ConnectionClose}
 import java.nio.charset.{CodingErrorAction, CharacterCodingException, Charset}
+import scala.Some
 
 /**
  * Deals with serializing/deserializing Frames from Bytes
@@ -31,11 +32,11 @@ object Frame{
   case object Incomplete extends ParsedFrame
   case object TooLarge extends ParsedFrame
   case object Invalid extends ParsedFrame
-  def read(in: ByteBuffer, maxMessageLength: Long = Long.MaxValue): ParsedFrame = {
+  def read(in0: InputStream, maxMessageLength: Long = Long.MaxValue): ParsedFrame = {
+    val in = new DataInputStream(in0)
+    if (in.available() < 2) return Incomplete
 
-    if (in.remaining() < 2) return Incomplete
-
-    val b0 = in.get
+    val b0 = in.readByte()
     val FIN = ((b0 >> 7) & 1) != 0
 
     val RSV = (
@@ -49,30 +50,30 @@ object Frame{
     }
 
 
-    val b1 = in.get
+    val b1 = in.readByte()
     val mask = (b1 >> 7) & 1
     val payloadLength = (b1 & 127) match{
       case 126 =>
-        if (in.remaining() < 2) return Incomplete
-        in.getShort & 0xffff
+        if (in.available() < 2) return Incomplete
+        in.readShort & 0xffff
       case 127 =>
-        if (in.remaining() < 4) return Incomplete
+        if (in.available() < 4) return Incomplete
 
-        in.getLong
+        in.readLong
       case x => x
     }
     val maskingKey = if (mask != 0) {
-      if (in.remaining() < 4) return Incomplete
-      Some(in.getInt)
+      if (in.available() < 4) return Incomplete
+      Some(in.readInt)
     } else None
 
     if (payloadLength > maxMessageLength) {
       TooLarge
-    } else if (in.remaining() < payloadLength) {
+    } else if (in.available() < payloadLength) {
       Incomplete
     } else {
       val data = new Array[Byte](payloadLength.toInt)
-      in.get(data)
+      in.read(data)
       for(m <- maskingKey) maskArray(data, m)
 
       val frame = Frame(FIN, RSV, opcode, maskingKey, ByteString(data))

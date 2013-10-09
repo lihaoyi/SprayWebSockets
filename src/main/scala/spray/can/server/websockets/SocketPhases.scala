@@ -4,7 +4,7 @@ import model._
 import spray.can.server.websockets.model.Frame.{Invalid, TooLarge, Incomplete, Successful}
 import OpCode._
 import spray.io._
-import java.nio.ByteBuffer
+import java.nio.{BufferUnderflowException, ByteBuffer}
 import spray.io.TickGenerator.Tick
 
 import akka.util.ByteString
@@ -14,7 +14,7 @@ import spray.can.server.websockets.Sockets.Upgraded
 import concurrent.duration.{FiniteDuration, Duration, Deadline}
 import akka.io.Tcp
 import java.nio.charset.{CodingErrorAction, CharacterCodingException, Charset}
-import java.io.ByteArrayOutputStream
+import java.io.{ObjectInputStream, ByteArrayOutputStream}
 
 /**
  * Stores handy socket pipeline related stuff
@@ -258,14 +258,7 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
       }
     }
 }
-class UberBuffer(initSize: Int = 1024){
-  private[this] var data = new Array[Byte](initSize)
-  private[this] var readPos = 0
-  private[this] var writePos = 0
-  def write(in: ByteString) = {
 
-  }
-}
 /**
  * Deserializes IOBridge.Received events into FrameEvents, and serializes
  * FrameCommands into IOConnection.Send commands. Also enforces the limits on
@@ -276,7 +269,7 @@ case class FrameParsing(maxMessageLength: Int) extends PipelineStage {
   val x = (math.random * 100).toInt
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
-      var streamBuffer = ByteBuffer.allocate(1024)
+      var streamBuffer = new UberBuffer(512)
 
 
       val commandPipeline: CPL = {
@@ -288,26 +281,20 @@ case class FrameParsing(maxMessageLength: Int) extends PipelineStage {
 
       val eventPipeline: EPL = {
         case Tcp.Received(data) =>
-          val newSize = data.length + streamBuffer.position()
-          if (newSize > streamBuffer.capacity()){
-            streamBuffer.flip()
-            val old = streamBuffer
-            streamBuffer = ByteBuffer.allocate(math.max(old.capacity() * 2, newSize))
-            streamBuffer.put(old)
-          }
-          data.copyToBuffer(streamBuffer)
-          streamBuffer.flip()
+          streamBuffer.write(data)
+
+
           var success = true
           var oneSuccess = false
           while(success){
-            streamBuffer.mark()
+            val oldPosition = streamBuffer.readPos
             model.Frame.read(streamBuffer, maxMessageLength) match {
               case Successful(frame) =>
                 eventPL(FrameEvent(frame))
                 oneSuccess = true
 
               case Incomplete =>
-                streamBuffer.reset()
+                streamBuffer.readPos = oldPosition
                 success = false
 
               case TooLarge =>
@@ -320,7 +307,7 @@ case class FrameParsing(maxMessageLength: Int) extends PipelineStage {
             }
           }
 
-          streamBuffer.compact()
+
 
         case x => eventPL(x)
       }

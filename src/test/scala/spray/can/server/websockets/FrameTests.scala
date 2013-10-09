@@ -6,11 +6,12 @@ import org.scalatest.FreeSpec
 import java.nio.ByteBuffer
 import akka.util.ByteString
 import util.Random
+import java.io.{ObjectInputStream, ByteArrayInputStream}
 
 class FrameTests extends FreeSpec{
   implicit def byteArrayToBuffer(array: Array[Byte]) = ByteString(array)
 
-  def checkFrame(f: Frame) = assert(Successful(f) === Frame.read(Frame.write(f).toByteBuffer))
+  def checkFrame(f: Frame) = assert(Successful(f) === Frame.read(new ByteArrayInputStream(Frame.write(f).toArray)))
 
   "serializing and deserializing should give you back the same thing" in {
 
