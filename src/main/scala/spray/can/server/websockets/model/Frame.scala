@@ -49,7 +49,6 @@ object Frame{
       case None => return Invalid
     }
 
-
     val b1 = in.readByte()
     val mask = (b1 >> 7) & 1
     val payloadLength = (b1 & 127) match{

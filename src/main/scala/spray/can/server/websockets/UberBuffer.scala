@@ -16,18 +16,10 @@ class UberBuffer(initSize: Int = 32){ self =>
   object inputStream extends InputStream{
     var mark = 0
     def read(): Int = {
-      println(readPos + " " + writePos + " " + data.toList)
-      println("Available " + readAvailable)
       val x = self.read().toInt
-      println("Available " + readAvailable)
       if (x < 0) x + 256 else x
     }
-    override def available() = {
-      val x = readAvailable
-      println("Available " + readAvailable)
-      println(readPos + " " + writePos + " " + data.toList)
-      x
-    }
+    override def available() = readAvailable
     override def read(b: Array[Byte], offset: Int, length: Int) = readTo(b, offset, length)
     override def skip(n: Long) = {
       readPos = incr(readPos, n)

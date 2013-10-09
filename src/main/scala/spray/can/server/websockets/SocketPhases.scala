@@ -69,10 +69,7 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
 
       val receiveAdapter = pcontext.actorContext.actorOf(Props(new ReceiverProxy(pcontext)))
 
-      val commandPipeline: CPL = {
-        case f =>
-          commandPL(f)
-      }
+      val commandPipeline: CPL = commandPL
 
       val eventPipeline: EPL = {
         case f @ FrameEvent(e) =>
@@ -86,13 +83,14 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
     }
 }
 
+/**
+ * Replies to incoming pings with pongs, saving you the hassle
+ */
 case class AutoPong(maskGen: Option[() => Int]) extends PipelineStage{
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
 
-      val commandPipeline: CPL = {
-        case x => commandPL(x)
-      }
+      val commandPipeline: CPL = commandPL
 
       val eventPipeline: EPL = {
         case FrameEvent(f @ Frame(true, _, Ping, _, _)) =>
@@ -104,10 +102,13 @@ case class AutoPong(maskGen: Option[() => Int]) extends PipelineStage{
     }
 }
 
-class Counter(var i: Int = 0) extends Function0[ByteString  ]{
+/**
+ * Default ping body generator
+ */
+class Counter(var i: Int = 0) extends Function0[ByteString]{
   def apply() = {
     i += 1
-    ByteString(i+"")
+    ByteString(i)
   }
 }
 /**
@@ -181,9 +182,9 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
     new Pipelines {
 
       var stored: Option[Frame] = None
-      val commandPipeline: CPL = {
-        case x => commandPL(x)
-      }
+
+      val commandPipeline: CPL = commandPL
+
       var lastTick: Deadline = Deadline.now
 
       val eventPipeline: EPL = {
@@ -214,8 +215,6 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
         // forward pings and pongs directly
         case FrameEvent(f @ Frame(true, (false, false, false), Ping | Pong, _, data)) =>
           eventPL(FrameEvent(f))
-
-
 
         // begin fragmented frame
         case FrameEvent(f @ Frame(false, (false, false, false), Text | Binary, _, _))
@@ -252,6 +251,7 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
           }
 
         case FrameEvent(f) => commandPL(Tcp.Close)
+
         case msg => eventPL(msg)
       }
     }
@@ -264,11 +264,9 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
  * spread out over multiple frames. Otherwise does not do anything fancy.
  */
 case class FrameParsing(maxMessageLength: Int) extends PipelineStage {
-  val x = (math.random * 100).toInt
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
       var streamBuffer = new UberBuffer(512)
-
 
       val commandPipeline: CPL = {
         case f: FrameCommand =>
