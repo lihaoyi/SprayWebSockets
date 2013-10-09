@@ -10,7 +10,7 @@ import util.Random
 class FrameTests extends FreeSpec{
   implicit def byteArrayToBuffer(array: Array[Byte]) = ByteString(array)
 
-  def checkFrame(f: Frame) = assert(Successful(f, ByteString()) === Frame.read(Frame.write(f)))
+  def checkFrame(f: Frame) = assert(Successful(f) === Frame.read(Frame.write(f).toByteBuffer))
 
   "serializing and deserializing should give you back the same thing" in {
 

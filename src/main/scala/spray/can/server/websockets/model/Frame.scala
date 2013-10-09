@@ -8,7 +8,7 @@ import scala.Some
 import scala.Some
 import scala.Some
 import spray.can.server.websockets.model.OpCode.{Ping, ConnectionClose}
-import java.nio.charset.{CharacterCodingException, Charset}
+import java.nio.charset.{CodingErrorAction, CharacterCodingException, Charset}
 
 /**
  * Deals with serializing/deserializing Frames from Bytes
@@ -27,72 +27,58 @@ object Frame{
   }
 
   sealed trait ParsedFrame
-  case class Successful(frame: Frame, remainder: ByteString) extends ParsedFrame
+  case class Successful(frame: Frame) extends ParsedFrame
   case object Incomplete extends ParsedFrame
   case object TooLarge extends ParsedFrame
   case object Invalid extends ParsedFrame
-  def read(in0: ByteString, maxMessageLength: Long = Long.MaxValue): ParsedFrame = {
-    try{
-      val in = in0.toByteBuffer
-      in.mark()
-      if (in.remaining() < 2) {
-        in.reset()
-        return Incomplete
-      }
-      val b0 = in.get
-      val FIN = ((b0 >> 7) & 1) != 0
+  def read(in: ByteBuffer, maxMessageLength: Long = Long.MaxValue): ParsedFrame = {
 
-      val RSV = (
-        ((b0 >> 6) & 1) != 0,
-        ((b0 >> 5) & 1) != 0,
-        ((b0 >> 4) & 1) != 0
-      )
-      val opcode = OpCode.find.lift(b0 & 0xf) match{
-        case Some(x) => x
-        case None => return Invalid
-      }
+    if (in.remaining() < 2) return Incomplete
 
+    val b0 = in.get
+    val FIN = ((b0 >> 7) & 1) != 0
 
-      val b1 = in.get
-      val mask = (b1 >> 7) & 1
-      val payloadLength = (b1 & 127) match{
-        case 126 =>
-          if (in.remaining() < 2) {
-            in.reset()
-            return Incomplete
-          }
-          in.getShort & 0xffff
-        case 127 =>
-          if (in.remaining() < 4) {
-            in.reset()
-            return Incomplete
-          }
-          in.getLong
-        case x => x
-      }
-      val maskingKey = if (mask != 0) {
-        if (in.remaining() < 4) return Incomplete
-        Some(in.getInt)
-      } else None
-
-      if (payloadLength > maxMessageLength) {
-        TooLarge
-      } else if (in.remaining() < payloadLength) {
-        Incomplete
-      } else {
-        val data = new Array[Byte](payloadLength.toInt)
-        in.get(data)
-        for(m <- maskingKey) maskArray(data, m)
-
-        val frame = Frame(FIN, RSV, opcode, maskingKey, ByteString(data))
-        Successful(frame, ByteString(in))
-      }
-
-    }catch{case e: Exception =>
-      println("PARSING EXCEPTION")
-      println(in0)
-      throw e
+    val RSV = (
+      ((b0 >> 6) & 1) != 0,
+      ((b0 >> 5) & 1) != 0,
+      ((b0 >> 4) & 1) != 0
+    )
+    val opcode = OpCode.find.lift(b0 & 0xf) match{
+      case Some(x) => x
+      case None => return Invalid
     }
+
+
+    val b1 = in.get
+    val mask = (b1 >> 7) & 1
+    val payloadLength = (b1 & 127) match{
+      case 126 =>
+        if (in.remaining() < 2) return Incomplete
+        in.getShort & 0xffff
+      case 127 =>
+        if (in.remaining() < 4) return Incomplete
+
+        in.getLong
+      case x => x
+    }
+    val maskingKey = if (mask != 0) {
+      if (in.remaining() < 4) return Incomplete
+      Some(in.getInt)
+    } else None
+
+    if (payloadLength > maxMessageLength) {
+      TooLarge
+    } else if (in.remaining() < payloadLength) {
+      Incomplete
+    } else {
+      val data = new Array[Byte](payloadLength.toInt)
+      in.get(data)
+      for(m <- maskingKey) maskArray(data, m)
+
+      val frame = Frame(FIN, RSV, opcode, maskingKey, ByteString(data))
+      Successful(frame)
+    }
+
   }
 
   def write(f: Frame): ByteString = {
@@ -141,7 +127,8 @@ case class Frame(FIN: Boolean = true,
                  maskingKey: Option[Int] = None,
                  data: ByteString = ByteString.empty){
 
-  def stringData = new String(data.toArray, "UTF-8")
+  lazy val stringData = data.utf8String
+
   implicit class x(bool: Boolean){ def b = if (bool) 1 else 0 }
 
 }

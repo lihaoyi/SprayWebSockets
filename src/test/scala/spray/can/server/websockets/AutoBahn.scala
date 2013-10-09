@@ -61,37 +61,44 @@ class AutoBahn extends FreeSpec with Eventually{
 
     Thread.sleep(100000000000000000L)
   }
-  /*"Client" in {
+/*  "Client" in {
     implicit val system = ActorSystem()
     implicit val patienceConfig = PatienceConfig(timeout = 2 seconds)
     // Hard-code the websocket request
-    val upgradeReq = HttpRequest(HttpMethods.GET,  "/mychat", List(
-      Host("server.example.com", 80),
+    val upgradeReq = HttpRequest(HttpMethods.GET,  "/", List(
+      Host("192.168.37.128", 9001),
+      RawHeader("Upgrade", "websocket"),
       Connection("Upgrade"),
-      RawHeader("Sec-WebSocket-Key", "x3JJHMbDL1EzLkh9GBhXDw==")
+      RawHeader("Sec-WebSocket-Key", "x3JJHMbDL1EzLkh9GBhXDw=="),
+      RawHeader("Sec-WebSocket-Protocol", "chat"),
+      RawHeader("Sec-WebSocket-Version", "13"),
+      RawHeader("Origin", "lihaoyi.com")
     ))
+
 
     class SocketClient extends Actor{
       var result: Frame = null
-
+      var count = 0
       def receive = {
         case x: Tcp.Connected =>
           println("Client Connected")
           sender ! Register(self) // normal Http client init
-//          sender ! upgradeReq // send an upgrade request immediately when connected
-
+          sender ! upgradeReq.copy(uri="/runCase?case=" + count)// send an upgrade request immediately when connected
+          count += 1
         case resp: HttpResponse =>
           println("Client Response")
+          println(resp)
           // when the response comes back, upgrade the connnection pipeline
           sender ! Sockets.UpgradeClient(self)
 
         case Sockets.Upgraded =>
           println("Client Upgraded")
+          sender ! Frame(opcode=OpCode.Ping, data = ByteString("hello"), maskingKey = Some(123))
           // send a websocket frame when the upgrade is complete
 
 
         case f: Frame =>
-          println("Client Frame")
+
           result = f // save the result
       }
     }
