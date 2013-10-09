@@ -2,19 +2,47 @@ package spray.can.server.websockets
 
 import akka.util.ByteString
 import java.nio.BufferUnderflowException
-import java.io.InputStream
+import java.io.{OutputStream, InputStream}
 
 /**
  * A very fast circular, growable read-write byte buffer.
  */
-class UberBuffer(initSize: Int = 1024) extends InputStream{
+class UberBuffer(initSize: Int = 1024){ self =>
   var data = new Array[Byte](initSize)
   var readPos = 0
   var writePos = 0
-
+  
   def capacity = data.length
+  object inputStream extends InputStream{
+    var mark = 0
+    def read(): Int = readByte().toInt
+    override def available() = readAvailable
+    override def read(b: Array[Byte], offset: Int, length: Int) = readTo(b, offset, length)
+    override def skip(n: Long) = {
+      readPos = incr(readPos, n)
+      n
+    }
+    override def mark(n: Int) = mark = readPos
+    override def reset() = readPos = mark
 
-  override def available = {
+  }
+  object outputStream extends OutputStream{
+    def write(b: Int) = self.write(ByteString(b.toByte))
+    override def write(b: Array[Byte], offset: Int, length: Int) = {
+      while (writeAvailable < length) expand()
+
+      val left = Math.min(data.length - writePos, length)
+      val right = Math.max(length - (data.length - writePos), 0)
+
+      System.arraycopy(b, writePos, data, offset, left)
+      System.arraycopy(b, writePos, data, offset + left, right)
+
+      writePos = incr(writePos, length)
+    }
+
+  }
+
+  def readAvailable = {
     if (writePos == readPos){
       0
     }else if(writePos > readPos){
@@ -63,28 +91,26 @@ class UberBuffer(initSize: Int = 1024) extends InputStream{
     data = newData
   }
 
-  def write(in: ByteString) = {
-    while (writeAvailable < in.length) {
-      expand()
-    }
+  def write(in: ByteString, offset: Int = 0, length0: Int = -1) = {
+    while (writeAvailable < in.length) expand()
 
     val (left, right) = in.splitAt(data.length - writePos)
 
-
     left.copyToArray(data, writePos)
     right.copyToArray(data, 0)
+
     writePos = incr(writePos, in.length)
   }
 
-  def readByte() = {
-    if (1 > available) throw new BufferUnderflowException
+  def read() = {
+    if (1 > readAvailable) throw new BufferUnderflowException
     val out = data(readPos)
     readPos = incr(readPos, 1)
     out
   }
 
-  override def read(target: Array[Byte], index: Int, n: Int) = {
-    if (n > available) throw new BufferUnderflowException
+  def readTo(target: Array[Byte], index: Int, n: Int) = {
+    if (n > readAvailable) throw new BufferUnderflowException
     val left = Math.min(data.length - readPos, n)
     val right = Math.max(n - (data.length - readPos), 0)
     System.arraycopy(data, readPos, target, index, left)
@@ -95,12 +121,5 @@ class UberBuffer(initSize: Int = 1024) extends InputStream{
 
   private[this] def incr(n: Int, d: Long) = {
     ((n + d) % data.length).toInt
-  }
-
-  def read(): Int = readByte()
-
-  override def skip(n: Long) = {
-    readPos = incr(readPos, n)
-    n
   }
 }

@@ -283,12 +283,11 @@ case class FrameParsing(maxMessageLength: Int) extends PipelineStage {
         case Tcp.Received(data) =>
           streamBuffer.write(data)
 
-
           var success = true
           var oneSuccess = false
           while(success){
             val oldPosition = streamBuffer.readPos
-            model.Frame.read(streamBuffer, maxMessageLength) match {
+            model.Frame.read(streamBuffer.inputStream, maxMessageLength) match {
               case Successful(frame) =>
                 eventPL(FrameEvent(frame))
                 oneSuccess = true

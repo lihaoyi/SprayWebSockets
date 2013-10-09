@@ -13,20 +13,20 @@ class UberBufferTest extends FreeSpec{
 
     buf.write(ByteString("abcdefghijklmnopqrstuvwxyz"))
 
-    buf.read(out, 0, 10)
-    buf.read(out, 10, 10)
+    buf.readTo(out, 0, 10)
+    buf.readTo(out, 10, 10)
     assert(buf.capacity == 32)
 
     buf.write(ByteString("abcdefghijklmnopqrstuvwxyz"))
     assert(buf.capacity == 64)
 
-    buf.read(out, 20, 10)
+    buf.readTo(out, 20, 10)
 
-    buf.read(out, 30, 10)
+    buf.readTo(out, 30, 10)
 
-    buf.read(out, 40, 10)
+    buf.readTo(out, 40, 10)
 
-    buf.read(out, 50, 2)
+    buf.readTo(out, 50, 2)
 
     val desired = ByteString("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz")
     assert(ByteString(out) == desired)
@@ -52,9 +52,9 @@ class UberBufferTest extends FreeSpec{
           buf.write(ByteString.fromArray(data, currentWrite, incr))
           currentWrite += incr
         }
-        if (buf.available > 0){
-          val incr = math.min(scala.util.Random.nextInt(buf.available), data.length-currentRead)
-          buf.read(out, currentRead, incr)
+        if (buf.readAvailable > 0){
+          val incr = math.min(scala.util.Random.nextInt(buf.readAvailable), data.length-currentRead)
+          buf.readTo(out, currentRead, incr)
           currentRead += incr
         }
       }
