@@ -55,8 +55,8 @@ class AutoBahn extends FreeSpec with Eventually{
     IO(Sockets) ! Http.Bind(
       server,
       "192.168.1.4",
-      9001,
-      settings=Some(ServerSettings(system).copy(sslEncryption = true))
+      9001/*,
+      settings=Some(ServerSettings(system).copy(sslEncryption = true))*/
     )
 
     Thread.sleep(100000000000000000L)

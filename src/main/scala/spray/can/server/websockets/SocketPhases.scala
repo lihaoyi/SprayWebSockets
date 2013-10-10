@@ -13,6 +13,7 @@ import spray.can.server.websockets.Sockets.Upgraded
 import concurrent.duration.{FiniteDuration, Duration, Deadline}
 import akka.io.Tcp
 import java.nio.charset.CharacterCodingException
+import java.io.DataInputStream
 
 /**
  * Stores handy socket pipeline related stuff
@@ -188,16 +189,16 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
       var lastTick: Deadline = Deadline.now
 
       val eventPipeline: EPL = {
-        case FrameEvent(f @ Frame(_, (false, false, false), _, frameMask, _)) if frameMask.getClass == maskGen.getClass =>
+        case FrameEvent(f @ Frame(_, 0, _, frameMask, _)) if frameMask.getClass == maskGen.getClass =>
           SocketPhases.close(commandPL, CloseCode.ProtocolError, "Improper masking")
 
-        case FrameEvent(f @ Frame(true, (false, false, false), Ping | Pong | ConnectionClose, _, data))
+        case FrameEvent(f @ Frame(true, 0, Ping | Pong | ConnectionClose, _, data))
           if data.length > 125 =>
           commandPL(Tcp.Close)
           //SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Control frames too large: " + data.length)
 
         // handle close requests
-        case FrameEvent(f @ Frame(true, (false, false, false), ConnectionClose, frameMask, data)) =>
+        case FrameEvent(f @ Frame(true, 0, ConnectionClose, frameMask, data)) =>
 
           val closeCode = if (data.length < 2) None else Some(data.toByteBuffer.getShort)
           val erroredCode = closeCode.fold(false)(c =>
@@ -213,21 +214,21 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
           eventPL(FrameEvent(f))
 
         // forward pings and pongs directly
-        case FrameEvent(f @ Frame(true, (false, false, false), Ping | Pong, _, data)) =>
+        case FrameEvent(f @ Frame(true, 0, Ping | Pong, _, data)) =>
           eventPL(FrameEvent(f))
 
         // begin fragmented frame
-        case FrameEvent(f @ Frame(false, (false, false, false), Text | Binary, _, _))
+        case FrameEvent(f @ Frame(false, 0, Text | Binary, _, _))
           if stored.isEmpty =>
           stored = Some(f)
 
         // aggregate fragmented data frames
-        case FrameEvent(f @ Frame(false, (false, false, false), Continuation, _, _))
+        case FrameEvent(f @ Frame(false, 0, Continuation, _, _))
           if stored.isDefined =>
           stored = Some(stored.get.copy(data = stored.get.data ++ f.data))
 
         // combine completed data frames
-        case FrameEvent(f @ Frame(true, (false, false, false), Continuation | Text | Binary, _, _)) =>
+        case FrameEvent(f @ Frame(true, 0, Continuation | Text | Binary, _, _)) =>
           if (f.opcode == Continuation && stored.isEmpty || f.opcode != Continuation && stored.isDefined){
             commandPL(Tcp.Close)
           }else if (stored.map(_.data.length).getOrElse(0) + f.data.length > maxMessageLength){
@@ -266,8 +267,8 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
 case class FrameParsing(maxMessageLength: Int) extends PipelineStage {
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
-      var streamBuffer = new UberBuffer(512)
-
+      val streamBuffer = new UberBuffer(512)
+      val dataInput = new DataInputStream(streamBuffer.inputStream)
       val commandPipeline: CPL = {
         case f: FrameCommand =>
           commandPL(Tcp.Write(Frame.write(f.frame)))
@@ -283,7 +284,7 @@ case class FrameParsing(maxMessageLength: Int) extends PipelineStage {
           var oneSuccess = false
           while(success){
             val oldPosition = streamBuffer.readPos
-            model.Frame.read(streamBuffer.inputStream, maxMessageLength) match {
+            model.Frame.read(dataInput, maxMessageLength) match {
               case Successful(frame) =>
                 eventPL(FrameEvent(frame))
                 oneSuccess = true

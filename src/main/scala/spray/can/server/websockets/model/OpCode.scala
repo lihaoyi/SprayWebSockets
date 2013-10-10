@@ -10,14 +10,15 @@ class OpCode(val value: Byte, val isControl: Boolean)
  * http://tools.ietf.org/html/rfc6455
  */
 object OpCode{
-  def find: PartialFunction[Int, OpCode] = {
-    case 0 => Continuation
-    case 1 => Text
-    case 2 => Binary
-    case 8 => ConnectionClose
-    case 9 => Ping
-    case 10 => Pong
-  }
+
+  val all = Map(
+    0 -> Continuation,
+    1 -> Text,
+    2 -> Binary,
+    8 -> ConnectionClose,
+    9 -> Ping,
+    10 -> Pong
+  )
 
   case object Continuation extends OpCode(0, false)
   case object Text extends OpCode(1, false)

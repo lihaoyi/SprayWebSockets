@@ -10,6 +10,7 @@ import scala.Some
 import spray.can.server.websockets.model.OpCode.{Ping, ConnectionClose}
 import java.nio.charset.{CodingErrorAction, CharacterCodingException, Charset}
 import scala.Some
+import java.util.regex.Pattern
 
 /**
  * Deals with serializing/deserializing Frames from Bytes
@@ -32,19 +33,15 @@ object Frame{
   case object Incomplete extends ParsedFrame
   case object TooLarge extends ParsedFrame
   case object Invalid extends ParsedFrame
-  def read(in0: InputStream, maxMessageLength: Long = Long.MaxValue): ParsedFrame = {
-    val in = new DataInputStream(in0)
+  def read(in: DataInputStream, maxMessageLength: Long = Long.MaxValue): ParsedFrame = {
     if (in.available() < 2) return Incomplete
 
     val b0 = in.readByte()
     val FIN = ((b0 >> 7) & 1) != 0
 
-    val RSV = (
-      ((b0 >> 6) & 1) != 0,
-      ((b0 >> 5) & 1) != 0,
-      ((b0 >> 4) & 1) != 0
-    )
-    val opcode = OpCode.find.lift(b0 & 0xf) match{
+    val RSV = (b0 >> 4) & 7
+
+    val opcode = OpCode.all.get(b0 & 0xf) match{
       case Some(x) => x
       case None => return Invalid
     }
@@ -57,28 +54,28 @@ object Frame{
         in.readShort & 0xffff
       case 127 =>
         if (in.available() < 4) return Incomplete
-
         in.readLong
+
       case x => x
     }
-    val maskingKey = if (mask != 0) {
-      if (in.available() < 4) return Incomplete
-      Some(in.readInt)
-    } else None
+    val maskingKey =
+      if (mask != 0) {
+        if (in.available() < 4) return Incomplete
+        Some(in.readInt)
+      } else {
+        None
+      }
 
-    if (payloadLength > maxMessageLength) {
-      TooLarge
-    } else if (in.available() < payloadLength) {
-      Incomplete
-    } else {
+    if (payloadLength > maxMessageLength) TooLarge
+    else if (in.available() < payloadLength) Incomplete
+    else {
       val data = new Array[Byte](payloadLength.toInt)
       in.read(data)
       for(m <- maskingKey) maskArray(data, m)
 
-      val frame = Frame(FIN, RSV, opcode, maskingKey, ByteString(data))
+      val frame = Frame(FIN, RSV.toByte, opcode, maskingKey, ByteString(data))
       Successful(frame)
     }
-
   }
 
   def write(f: Frame): ByteString = {
@@ -88,9 +85,7 @@ object Frame{
 
     out.writeByte(
       (FIN.b << 7) |
-      (RSV._1.b << 6) |
-      (RSV._2.b << 5) |
-      (RSV._3.b << 4) |
+      (RSV << 4) |
       opcode.value
     )
     val b1 = (maskingKey.isDefined.b << 7) | (
@@ -122,7 +117,7 @@ object Frame{
 }
 
 case class Frame(FIN: Boolean = true,
-                 RSV: (Boolean, Boolean, Boolean) = (false, false, false),
+                 RSV: Byte = 0,
                  opcode: OpCode,
                  maskingKey: Option[Int] = None,
                  data: ByteString = ByteString.empty){

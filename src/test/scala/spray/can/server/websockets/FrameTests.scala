@@ -6,20 +6,20 @@ import org.scalatest.FreeSpec
 import java.nio.ByteBuffer
 import akka.util.ByteString
 import util.Random
-import java.io.{ObjectInputStream, ByteArrayInputStream}
+import java.io.{DataInputStream, ObjectInputStream, ByteArrayInputStream}
 
 class FrameTests extends FreeSpec{
   implicit def byteArrayToBuffer(array: Array[Byte]) = ByteString(array)
 
-  def checkFrame(f: Frame) = assert(Successful(f) === Frame.read(new ByteArrayInputStream(Frame.write(f).toArray)))
+  def checkFrame(f: Frame) = assert(Successful(f) === Frame.read(new DataInputStream(new ByteArrayInputStream(Frame.write(f).toArray))))
 
   "serializing and deserializing should give you back the same thing" in {
 
-    checkFrame(Frame(true, (false, false, false), OpCode.Text, Some(12345123), "i am a cow".getBytes))
-    checkFrame(Frame(false, (true, false, true), OpCode.Binary, Some(12345123), Array[Byte](1, 2, 3, 4, 5, 6)))
-    checkFrame(Frame(false, (true, false, false), OpCode.Continuation, None, Array[Byte](1, 2, 4, 8, 16, 32, 64)))
-    checkFrame(Frame(false, (true, true, false), OpCode.Ping, None, Array[Byte](1, 2, 4, 8, 16, 32, 64)))
-    checkFrame(Frame(true, (false, true, true), OpCode.Pong, None, Array[Byte](1, 2, 4, 8, 16, 32, 64)))
+    checkFrame(Frame(true, 0, OpCode.Text, Some(12345123), "i am a cow".getBytes))
+    checkFrame(Frame(false, 5, OpCode.Binary, Some(12345123), Array[Byte](1, 2, 3, 4, 5, 6)))
+    checkFrame(Frame(false, 1, OpCode.Continuation, None, Array[Byte](1, 2, 4, 8, 16, 32, 64)))
+    checkFrame(Frame(false, 3, OpCode.Ping, None, Array[Byte](1, 2, 4, 8, 16, 32, 64)))
+    checkFrame(Frame(true, 6, OpCode.Pong, None, Array[Byte](1, 2, 4, 8, 16, 32, 64)))
 
 
   }
@@ -28,7 +28,7 @@ class FrameTests extends FreeSpec{
       import Random._
       checkFrame(Frame(
         nextBoolean(),
-        (nextBoolean(), nextBoolean(), nextBoolean()),
+        nextInt(8).toByte,
         OpCode.valid(Random.nextInt(OpCode.valid.length)),
         maskingKey = nextBoolean() match{
           case false => None

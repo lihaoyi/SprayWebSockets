@@ -140,7 +140,7 @@ class SocketsTest extends FreeSpec with Eventually{
   import Util.blockActorRef
   "Echo Server Tests" - {
     "hello world with echo server" - doTwice(){ connection =>
-      def frame = Frame(true, (false, false, false), OpCode.Text, Some(12345123), "i am cow")
+      def frame = Frame(true, 0, OpCode.Text, Some(12345123), "i am cow")
       val r3 = connection await frame
       assert(r3.stringData === "I AM COW1")
       val r4 = connection await frame
