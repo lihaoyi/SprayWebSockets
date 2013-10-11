@@ -61,10 +61,8 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
    */
   class ReceiverProxy(pcontext: PipelineContext) extends Actor{
     def receive = {
-      case f: model.Frame =>
-        pcontext.actorContext.self ! FrameCommand(f)
-      case Tcp.Close =>
-        pcontext.actorContext.self ! Tcp.Close
+      case f: model.Frame => pcontext.actorContext.self ! FrameCommand(f)
+      case Tcp.Close      => pcontext.actorContext.self ! Tcp.Close
     }
   }
 
