@@ -14,6 +14,7 @@ import concurrent.duration.{FiniteDuration, Duration, Deadline}
 import akka.io.Tcp
 import java.nio.charset.CharacterCodingException
 import java.io.DataInputStream
+import spray.can.Http
 
 /**
  * Stores handy socket pipeline related stuff
@@ -79,6 +80,7 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
           commandPL(Pipeline.Tell(handler, Tcp.Closed, receiveAdapter))
         case Sockets.Upgraded => commandPL(Pipeline.Tell(handler, Upgraded, receiveAdapter))
         case rtt: Sockets.RoundTripTime => commandPL(Pipeline.Tell(handler, rtt, receiveAdapter))
+        case Http.MessageEvent(resp: spray.http.HttpResponse) => commandPL(Pipeline.Tell(handler, resp, receiveAdapter))
         case x => // ignore all other events, e.g. Ticks
       }
     }
@@ -139,11 +141,8 @@ case class AutoPing(interval: Duration = Duration.Inf,
       }
 
       val commandPipeline: CPL = {
-        case fc @ FrameCommand(f @ Frame(true, _, Ping, _, data)) =>
-          sendData(data)
-
-        case x =>
-          commandPL(x)
+        case fc @ FrameCommand(f @ Frame(true, _, Ping, _, data)) => sendData(data)
+        case x => commandPL(x)
       }
 
       val eventPipeline: EPL = {
@@ -278,16 +277,15 @@ case class FrameParsing(maxMessageLength: Int) extends PipelineStage {
 
       val eventPipeline: EPL = {
         case Tcp.Received(data) =>
+          println("FrameParsing Received")
           streamBuffer.write(data)
 
           var success = true
-          var oneSuccess = false
           while(success){
             val oldPosition = streamBuffer.readPos
             model.Frame.read(dataInput, maxMessageLength) match {
               case Successful(frame) =>
                 eventPL(FrameEvent(frame))
-                oneSuccess = true
 
               case Incomplete =>
                 streamBuffer.readPos = oldPosition
@@ -302,6 +300,7 @@ case class FrameParsing(maxMessageLength: Int) extends PipelineStage {
                 success = false
             }
           }
+          println("FrameParsing Done")
 
         case x => eventPL(x)
       }

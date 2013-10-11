@@ -20,7 +20,7 @@ import org.java_websocket.handshake.ClientHandshake
 
 class AutoBahn extends FreeSpec with Eventually{
 
-  "Server" in {
+  /*"Server" in {
     implicit val system = ActorSystem()
     implicit val ec = system.dispatcher
     implicit val patienceConfig = PatienceConfig(timeout = 2 seconds)
@@ -60,12 +60,13 @@ class AutoBahn extends FreeSpec with Eventually{
     )
 
     Thread.sleep(100000000000000000L)
-  }
-/*  "Client" in {
+  }*/
+  "Client" in {
+    //"/runCase?case=1&agent=cow/0.6.3"
     implicit val system = ActorSystem()
     implicit val patienceConfig = PatienceConfig(timeout = 2 seconds)
     // Hard-code the websocket request
-    val upgradeReq = HttpRequest(HttpMethods.GET,  "/", List(
+    val upgradeReq = HttpRequest(HttpMethods.GET, "/", List(
       Host("192.168.37.128", 9001),
       RawHeader("Upgrade", "websocket"),
       Connection("Upgrade"),
@@ -75,41 +76,45 @@ class AutoBahn extends FreeSpec with Eventually{
       RawHeader("Origin", "lihaoyi.com")
     ))
 
-
     class SocketClient extends Actor{
       var result: Frame = null
-      var count = 0
+      var count = 1
       def receive = {
         case x: Tcp.Connected =>
-          println("Client Connected")
-          sender ! Register(self) // normal Http client init
-          sender ! upgradeReq.copy(uri="/runCase?case=" + count)// send an upgrade request immediately when connected
+          println("Client Connected " + count)
+          sender ! upgradeReq.copy(uri=s"/runCase?case=$count&agent=cow/0.6.3")// send an upgrade request immediately when connected
+
           count += 1
+
         case resp: HttpResponse =>
           println("Client Response")
           println(resp)
-          // when the response comes back, upgrade the connnection pipeline
           sender ! Sockets.UpgradeClient(self)
+          // when the response comes back, upgrade the connnection pipeline
+
 
         case Sockets.Upgraded =>
           println("Client Upgraded")
           sender ! Frame(opcode=OpCode.Ping, data = ByteString("hello"), maskingKey = Some(123))
           // send a websocket frame when the upgrade is complete
 
-
         case f: Frame =>
-
+          println("Client Received " + f)
+          sender ! f.copy(maskingKey=Some(31337))
           result = f // save the result
+
+        case Tcp.Closed =>
+          println("Connection Closed\n")
+
+          IO(Sockets) ! Http.Connect("192.168.37.128", 9001)
+        case x =>
+          println("UNKNOWN " + x)
       }
     }
 
     implicit val client = system.actorOf(Props(new SocketClient))
-    IO(Sockets) ! Http.Connect(
-      "192.168.37.128",
-      9001
-    )
-
+    IO(Sockets) ! Http.Connect("192.168.37.128", 9001)
 
     Thread.sleep(100000000000000000L)
-  }*/
+  }
 }

@@ -51,6 +51,7 @@ class SocketsTest extends FreeSpec with Eventually{
 
       case Sockets.Upgraded =>
         println("Server Upgraded")
+        sender ! Frame(opcode = Text, data = ByteString("Hello"))
     }
   }
 
@@ -63,23 +64,27 @@ class SocketsTest extends FreeSpec with Eventually{
     def receive = {
 
       case x: HttpResponse =>
-        connection ! Sockets.UpgradeClient(self, maskGen = () => 31337)(extraStages)
+        println("Client Response")
+        connection = sender
+
 
       case x: Http.Connected =>
         connection = sender
         connection ! req
+        connection ! Sockets.UpgradeClient(self, maskGen = () => 31337)(extraStages)
 
-      case Sockets.Upgraded =>
-        println("Client Upgraded")
-        connection = sender
-        ready = true
+      case Sockets.Upgraded => println("Client Upgraded")
 
       case Util.Send(frame) =>
+        println("Client Send " + frame)
         commander = sender
         connection ! frame
 
       case f: Frame =>
+        println("Client Frame " + f)
+        ready = true
         commander ! f
+
 
       case "ready?" =>
         sender ! ready
@@ -120,6 +125,8 @@ class SocketsTest extends FreeSpec with Eventually{
 
     IO(Sockets).!(Http.Connect("localhost", port, settings=Some(ClientConnectionSettings(system).copy(sslEncryption = ssl))))(client)
 
+
+
     eventually{
       assert(Await.result(client ? "ready?", 0.1 seconds) == true)
     }(PatienceConfig(timeout=10 seconds))
@@ -141,6 +148,7 @@ class SocketsTest extends FreeSpec with Eventually{
   "Echo Server Tests" - {
     "hello world with echo server" - doTwice(){ connection =>
       def frame = Frame(true, 0, OpCode.Text, Some(12345123), "i am cow")
+
       val r3 = connection await frame
       assert(r3.stringData === "I AM COW1")
       val r4 = connection await frame

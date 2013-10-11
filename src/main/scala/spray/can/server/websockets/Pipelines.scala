@@ -4,11 +4,13 @@ import spray.can.client._
 import spray.io._
 import spray.can.server._
 import spray.can.server.StatsSupport.StatsHolder
-import scala.Some
 import spray.can.server.websockets.Sockets.Upgraded
 import akka.io.Tcp
 import spray.can.{Http, HttpExt}
 import akka.actor.ActorRef
+import spray.can.parsing.{Result, HttpResponsePartParser, ParserSettings}
+import spray.http._
+import akka.util.CompactByteString
 
 
 /**
@@ -80,8 +82,41 @@ object SocketClientConnection{
         ResponseParsing(parserSettings) >>
         RequestRendering(settings) >>
         ConnectionTimeouts(idleTimeout) ? (reapingCycle.isFinite && idleTimeout.isFinite)
-    ){case x: Sockets.UpgradeClient => x.pipeline} >>
+    ){case x: Sockets.UpgradeClient => x.pipeline >> OneShotResponseParsing(parserSettings)} >>
       SslTlsSupport ? sslEncryption >>
       TickGenerator(reapingCycle) ? (idleTimeout.isFinite || requestTimeout.isFinite)
+  }
+}
+
+object OneShotResponseParsing {
+  def apply(settings: ParserSettings): PipelineStage = {
+    new PipelineStage {
+      val parser = new HttpResponsePartParser(settings)()
+      parser.startResponse(HttpMethods.GET)
+      var active = true
+      def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
+        new Pipelines {
+          import context.log
+
+          def parse(data: CompactByteString): Unit =
+            parser.parse(data) match {
+              case Result.NeedMoreData => // just wait for the next packet
+              case Result.ParsingError(_, info) =>
+                commandPL(Http.Close)
+              case Result.Ok(part, remainingData, _) ⇒
+                eventPL(Http.MessageEvent(part))
+                active = false
+                eventPL(Tcp.Received(remainingData))
+              case x =>
+            }
+
+          val commandPipeline: CPL = commandPL
+
+          val eventPipeline: EPL = {
+            case Tcp.Received(data: CompactByteString) if active => parse(data)
+            case ev ⇒ eventPL(ev)
+          }
+        }
+    }
   }
 }
