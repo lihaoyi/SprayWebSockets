@@ -39,8 +39,8 @@ class SocketExample extends FreeSpec with Eventually{
           // Upgrade the connection to websockets if you think the incoming
           // request looks good
           if (true){
-            sender ! Sockets.acceptAllFunction(req) // helper to craft http response
-            sender ! Sockets.UpgradeServer(self) // upgrade the pipeline
+
+            sender ! Sockets.UpgradeServer(Sockets.acceptAllFunction(req), self) // upgrade the pipeline
           }
 
         case Sockets.Upgraded => // do nothing
@@ -61,11 +61,11 @@ class SocketExample extends FreeSpec with Eventually{
       def receive = {
         case x: Tcp.Connected =>
           sender ! Register(self) // normal Http client init
-          sender ! upgradeReq // send an upgrade request immediately when connected
+          sender ! Sockets.UpgradeClient(upgradeReq, self)// send an upgrade request immediately when connected
 
         case resp: HttpResponse =>
           // when the response comes back, upgrade the connnection pipeline
-          sender ! Sockets.UpgradeClient(self)
+
 
         case Sockets.Upgraded =>
           // send a websocket frame when the upgrade is complete

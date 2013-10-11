@@ -36,16 +36,18 @@ object Sockets extends ExtensionKey[SocketExt]{
   type ServerPipelineStage = RawPipelineStage[SslTlsContext with Context]
   type ClientPipelineStage = RawPipelineStage[PipelineContext]
   val EmptyPipelineStage = spray.io.EmptyPipelineStage
-  class UpgradeServer(val pipeline: ServerPipelineStage) extends Command
-  class UpgradeClient(val pipeline: ClientPipelineStage) extends Command
+  class UpgradeServer(val resp: HttpResponse, val pipeline: ServerPipelineStage) extends Command
+  class UpgradeClient(val req: HttpRequest, val pipeline: ClientPipelineStage) extends Command
 
 
 
   object UpgradeServer{
-    def apply(frameHandler: ActorRef,
+    def apply(resp: HttpResponse,
+              frameHandler: ActorRef,
               frameSizeLimit: Int = Int.MaxValue)
              (implicit extraStages: ServerPipelineStage = AutoPong(None)) = {
       new UpgradeServer(
+        resp,
         WebsocketFrontEnd(frameHandler) >>
         extraStages >>
         Consolidation(frameSizeLimit, None) >>
@@ -54,15 +56,18 @@ object Sockets extends ExtensionKey[SocketExt]{
     }
   }
   object UpgradeClient{
-    def apply(frameHandler: ActorRef,
+    def apply(req: HttpRequest,
+              frameHandler: ActorRef,
               frameSizeLimit: Int = Int.MaxValue,
               maskGen: () => Int = () => util.Random.nextInt())
-             (implicit extraStages: ClientPipelineStage = AutoPong(Some(maskGen))) ={
+             (implicit extraStages: ClientPipelineStage = AutoPong(Some(maskGen))) = {
       new UpgradeClient(
+        req,
         WebsocketFrontEnd(frameHandler) >>
         extraStages >>
         Consolidation(frameSizeLimit, Some(maskGen)) >>
         FrameParsing(frameSizeLimit)
+
       )
     }
   }

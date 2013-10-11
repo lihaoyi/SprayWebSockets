@@ -6,7 +6,7 @@ import OpCode._
 import spray.io._
 import spray.io.TickGenerator.Tick
 
-import akka.util.ByteString
+import akka.util.{CompactByteString, ByteString}
 import akka.actor.{Props, Actor, ActorRef}
 
 import spray.can.server.websockets.Sockets.Upgraded
@@ -15,6 +15,8 @@ import akka.io.Tcp
 import java.nio.charset.CharacterCodingException
 import java.io.DataInputStream
 import spray.can.Http
+import spray.can.parsing.{Result, HttpResponsePartParser, ParserSettings}
+import spray.http.HttpMethods
 
 /**
  * Stores handy socket pipeline related stuff
@@ -68,17 +70,12 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
 
   def apply(pcontext: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines{
-
       val receiveAdapter = pcontext.actorContext.actorOf(Props(new ReceiverProxy(pcontext)))
-
       val commandPipeline: CPL = commandPL
-
       val eventPipeline: EPL = {
-        case f @ FrameEvent(e) =>
-           commandPL(Pipeline.Tell(handler, e, receiveAdapter))
-        case Tcp.Closed =>
-          commandPL(Pipeline.Tell(handler, Tcp.Closed, receiveAdapter))
-        case Sockets.Upgraded => commandPL(Pipeline.Tell(handler, Upgraded, receiveAdapter))
+        case f @ FrameEvent(e)          => commandPL(Pipeline.Tell(handler, e, receiveAdapter))
+        case c: Tcp.ConnectionClosed    => commandPL(Pipeline.Tell(handler, c, receiveAdapter))
+        case Sockets.Upgraded           => commandPL(Pipeline.Tell(handler, Upgraded, receiveAdapter))
         case rtt: Sockets.RoundTripTime => commandPL(Pipeline.Tell(handler, rtt, receiveAdapter))
         case Http.MessageEvent(resp: spray.http.HttpResponse) => commandPL(Pipeline.Tell(handler, resp, receiveAdapter))
         case x => // ignore all other events, e.g. Ticks
@@ -269,15 +266,13 @@ case class FrameParsing(maxMessageLength: Int) extends PipelineStage {
       val streamBuffer = new UberBuffer(512)
       val dataInput = new DataInputStream(streamBuffer.inputStream)
       val commandPipeline: CPL = {
-        case f: FrameCommand =>
-          commandPL(Tcp.Write(Frame.write(f.frame)))
-        case x =>
-          commandPL(x)
+        case f: FrameCommand => commandPL(Tcp.Write(Frame.write(f.frame)))
+        case x               => commandPL(x)
       }
 
       val eventPipeline: EPL = {
         case Tcp.Received(data) =>
-          println("FrameParsing Received")
+
           streamBuffer.write(data)
 
           var success = true
@@ -300,9 +295,40 @@ case class FrameParsing(maxMessageLength: Int) extends PipelineStage {
                 success = false
             }
           }
-          println("FrameParsing Done")
 
         case x => eventPL(x)
       }
     }
+}
+
+object OneShotResponseParsing {
+  def apply(settings: ParserSettings): PipelineStage = {
+    new PipelineStage {
+      val parser = new HttpResponsePartParser(settings)()
+      parser.startResponse(HttpMethods.GET)
+      var active = true
+      def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
+        new Pipelines {
+
+          def parse(data: CompactByteString): Unit =
+            parser.parse(data) match {
+              case Result.NeedMoreData => // just wait for the next packet
+              case Result.ParsingError(_, info) =>
+                commandPL(Http.Close)
+              case Result.Ok(part, remainingData, _) ⇒
+                active = false
+                eventPL(Http.MessageEvent(part))
+                eventPL(Tcp.Received(remainingData))
+              case x =>
+            }
+
+          val commandPipeline: CPL = commandPL
+
+          val eventPipeline: EPL = {
+            case Tcp.Received(data: CompactByteString) if active => parse(data)
+            case ev ⇒ eventPL(ev)
+          }
+        }
+    }
+  }
 }

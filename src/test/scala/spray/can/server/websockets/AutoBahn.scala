@@ -4,7 +4,7 @@ import org.scalatest.FreeSpec
 import org.scalatest.concurrent.Eventually
 import akka.io.{Tcp, IO}
 import spray.can.Http
-import akka.actor.{Props, ActorSystem, Actor}
+import akka.actor.{ActorRef, Props, ActorSystem, Actor}
 import spray.can.server.websockets.model.{OpCode, Frame}
 import spray.can.server.websockets.model.OpCode.{Binary, Text}
 import akka.util.ByteString
@@ -20,7 +20,7 @@ import org.java_websocket.handshake.ClientHandshake
 
 class AutoBahn extends FreeSpec with Eventually{
 
-  /*"Server" in {
+  "Server" in {
     implicit val system = ActorSystem()
     implicit val ec = system.dispatcher
     implicit val patienceConfig = PatienceConfig(timeout = 2 seconds)
@@ -28,23 +28,10 @@ class AutoBahn extends FreeSpec with Eventually{
 
     class SocketServer extends Actor{
       def receive = {
-
-        case x: Tcp.Connected =>
-          sender ! Register(self) // normal Http server init
-
-        case req: HttpRequest =>
-          // Upgrade the connection to websockets if you think the incoming
-          // request looks good
-          sender ! Sockets.acceptAllFunction(req) // helper to craft http response
-          sender ! Sockets.UpgradeServer(self) // upgrade the pipeline
-
-
-        case Sockets.Upgraded =>
-          // do nothing
-
-        case f @ Frame(fin, rsv, Text | Binary, maskingKey, data) =>
-          sender ! f.copy(maskingKey = None)
-
+        case x: Tcp.Connected => sender ! Register(self) // normal Http server init
+        case req: HttpRequest => sender ! Sockets.UpgradeServer(Sockets.acceptAllFunction(req), self) // upgrade the pipeline
+        case Sockets.Upgraded => // do nothing
+        case f @ Frame(fin, rsv, Text | Binary, maskingKey, data) => sender ! f.copy(maskingKey = None)
         case x =>
       }
     }
@@ -60,61 +47,66 @@ class AutoBahn extends FreeSpec with Eventually{
     )
 
     Thread.sleep(100000000000000000L)
-  }*/
-  "Client" in {
-    //"/runCase?case=1&agent=cow/0.6.3"
-    implicit val system = ActorSystem()
-    implicit val patienceConfig = PatienceConfig(timeout = 2 seconds)
-    // Hard-code the websocket request
-    val upgradeReq = HttpRequest(HttpMethods.GET, "/", List(
-      Host("192.168.37.128", 9001),
-      RawHeader("Upgrade", "websocket"),
-      Connection("Upgrade"),
-      RawHeader("Sec-WebSocket-Key", "x3JJHMbDL1EzLkh9GBhXDw=="),
-      RawHeader("Sec-WebSocket-Protocol", "chat"),
-      RawHeader("Sec-WebSocket-Version", "13"),
-      RawHeader("Origin", "lihaoyi.com")
-    ))
-
-    class SocketClient extends Actor{
-      var result: Frame = null
-      var count = 1
-      def receive = {
-        case x: Tcp.Connected =>
-          println("Client Connected " + count)
-          sender ! upgradeReq.copy(uri=s"/runCase?case=$count&agent=cow/0.6.3")// send an upgrade request immediately when connected
-
-          count += 1
-
-        case resp: HttpResponse =>
-          println("Client Response")
-          println(resp)
-          sender ! Sockets.UpgradeClient(self)
-          // when the response comes back, upgrade the connnection pipeline
-
-
-        case Sockets.Upgraded =>
-          println("Client Upgraded")
-          sender ! Frame(opcode=OpCode.Ping, data = ByteString("hello"), maskingKey = Some(123))
-          // send a websocket frame when the upgrade is complete
-
-        case f: Frame =>
-          println("Client Received " + f)
-          sender ! f.copy(maskingKey=Some(31337))
-          result = f // save the result
-
-        case Tcp.Closed =>
-          println("Connection Closed\n")
-
-          IO(Sockets) ! Http.Connect("192.168.37.128", 9001)
-        case x =>
-          println("UNKNOWN " + x)
-      }
-    }
-
-    implicit val client = system.actorOf(Props(new SocketClient))
-    IO(Sockets) ! Http.Connect("192.168.37.128", 9001)
-
-    Thread.sleep(100000000000000000L)
   }
+//  "Client" in {
+//    //"/runCase?case=1&agent=cow/0.6.3"
+//    implicit val system = ActorSystem()
+//    implicit val patienceConfig = PatienceConfig(timeout = 2 seconds)
+//    // Hard-code the websocket request
+//    val upgradeReq = HttpRequest(HttpMethods.GET, "/", List(
+//      Host("192.168.37.128", 9001),
+//      RawHeader("Upgrade", "websocket"),
+//      Connection("Upgrade"),
+//      RawHeader("Sec-WebSocket-Key", "x3JJHMbDL1EzLkh9GBhXDw=="),
+//      RawHeader("Sec-WebSocket-Protocol", "chat"),
+//      RawHeader("Sec-WebSocket-Version", "13"),
+//      RawHeader("Origin", "lihaoyi.com")
+//    ))
+//
+//    class SocketClient extends Actor{
+//      var result: Frame = null
+//      var count = 0
+//      var total = 0
+//      var senders = Set.empty[ActorRef]
+//      def receive = {
+//        case x: Tcp.Connected =>
+//          println("Client Connected")
+//          if (total == 0)
+//            sender ! Sockets.UpgradeClient(upgradeReq.copy(uri=s"/getCaseCount"), self)
+//          else if (count < total)
+//            sender ! Sockets.UpgradeClient(upgradeReq.copy(uri=s"/runCase?case=$count&agent=spraywebsockets"), self)
+//          else{
+//            sender ! Sockets.UpgradeClient(upgradeReq.copy(uri=s"/updateReports?agent=spraywebsockets"), self)
+//            context.stop(self)
+//          }
+//          count += 1
+//
+//        case resp: HttpResponse => println("Client Response " + resp)
+//
+//        case Sockets.Upgraded => println("Client Upgraded")
+//
+//        case f: Frame  if f.opcode == Text || f.opcode == Binary =>
+//          if (total == 0)
+//            total = f.data.utf8String.toInt
+//
+//          sender ! f.copy(maskingKey=Some(31337))
+//          result = f // save the result
+//
+//        case c: Tcp.ConnectionClosed =>
+//
+//          if (!senders.contains(sender)){
+//            println("Client Closed " + c + sender)
+//            senders = senders + sender
+//            IO(Sockets) ! Http.Connect("192.168.37.128", 9001)
+//          }
+//
+//        case x =>
+//      }
+//    }
+//
+//    implicit val client = system.actorOf(Props(new SocketClient))
+//    IO(Sockets) ! Http.Connect("192.168.37.128", 9001)
+//
+//    Thread.sleep(100000000000000000L)
+//  }
 }

@@ -11,6 +11,7 @@ import akka.actor.ActorRef
 import spray.can.parsing.{Result, HttpResponsePartParser, ParserSettings}
 import spray.http._
 import akka.util.CompactByteString
+import spray.can.Http.MessageCommand
 
 
 /**
@@ -36,13 +37,15 @@ object SocketListener{
         RequestParsing(settings) >>
         ResponseRendering(settings) >>
         ConnectionTimeouts(idleTimeout) ? (reapingCycle.isFinite && idleTimeout.isFinite)
-    ){case x: Sockets.UpgradeServer => x.pipeline} >>
+    ){case x: Sockets.UpgradeServer =>
+      (x.pipeline, x.resp)
+    } >>
       SslTlsSupport ? sslEncryption >>
       TickGenerator(reapingCycle) ? (reapingCycle.isFinite && (idleTimeout.isFinite || requestTimeout.isFinite))
   }
 }
 case class Switching[T <: PipelineContext](stage1: RawPipelineStage[T])
-                                          (stage2: PartialFunction[Tcp.Command, RawPipelineStage[T]])
+                                          (stage2: PartialFunction[Tcp.Command, (RawPipelineStage[T], HttpMessage)])
   extends RawPipelineStage[T] {
 
   def apply(context: T, commandPL: CPL, eventPL: EPL): Pipelines =
@@ -55,7 +58,9 @@ case class Switching[T <: PipelineContext](stage1: RawPipelineStage[T])
       // it is important to introduce the proxy to the var here
       def commandPipeline: CPL = {
         case x if stage2.isDefinedAt(x) =>
-          val pl2 = stage2(x)(context, commandPL, eventPL)
+          val (pl20, msg) = stage2(x)
+          val pl2 = pl20(context, commandPL, eventPL)
+          pl1.commandPipeline(MessageCommand(msg))
           eventPLVar = pl2.eventPipeline
           commandPLVar = pl2.commandPipeline
           eventPLVar(Upgraded)
@@ -82,41 +87,11 @@ object SocketClientConnection{
         ResponseParsing(parserSettings) >>
         RequestRendering(settings) >>
         ConnectionTimeouts(idleTimeout) ? (reapingCycle.isFinite && idleTimeout.isFinite)
-    ){case x: Sockets.UpgradeClient => x.pipeline >> OneShotResponseParsing(parserSettings)} >>
+    ){case x: Sockets.UpgradeClient =>
+      (x.pipeline >> OneShotResponseParsing(parserSettings), x.req)
+    } >>
       SslTlsSupport ? sslEncryption >>
       TickGenerator(reapingCycle) ? (idleTimeout.isFinite || requestTimeout.isFinite)
   }
 }
 
-object OneShotResponseParsing {
-  def apply(settings: ParserSettings): PipelineStage = {
-    new PipelineStage {
-      val parser = new HttpResponsePartParser(settings)()
-      parser.startResponse(HttpMethods.GET)
-      var active = true
-      def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
-        new Pipelines {
-          import context.log
-
-          def parse(data: CompactByteString): Unit =
-            parser.parse(data) match {
-              case Result.NeedMoreData => // just wait for the next packet
-              case Result.ParsingError(_, info) =>
-                commandPL(Http.Close)
-              case Result.Ok(part, remainingData, _) ⇒
-                eventPL(Http.MessageEvent(part))
-                active = false
-                eventPL(Tcp.Received(remainingData))
-              case x =>
-            }
-
-          val commandPipeline: CPL = commandPL
-
-          val eventPipeline: EPL = {
-            case Tcp.Received(data: CompactByteString) if active => parse(data)
-            case ev ⇒ eventPL(ev)
-          }
-        }
-    }
-  }
-}
