@@ -28,15 +28,14 @@ val upgradeReq = HttpRequest(HttpMethods.GET,  "/mychat", List(
 
 class SocketServer extends Actor{
   def receive = {
-
     case x: Tcp.Connected => sender ! Register(self) // normal Http server init
 
     case req: HttpRequest =>
       // Upgrade the connection to websockets if you think the incoming
       // request looks good
       if (true){
-        sender ! Sockets.acceptAllFunction(req) // helper to craft http response
-        sender ! Sockets.UpgradeServer(self)() // upgrade the pipeline
+        // upgrade the pipeline
+        sender ! Sockets.UpgradeServer(Sockets.acceptAllFunction(req), self)
       }
 
     case Sockets.Upgraded => // do nothing
@@ -56,20 +55,20 @@ class SocketClient extends Actor{
 
   def receive = {
     case x: Tcp.Connected =>
-      sender ! Register(self) // normal Http client init
-      sender ! upgradeReq // send an upgrade request immediately when connected
+      // send an upgrade request immediately when connected
+      sender ! Sockets.UpgradeClient(upgradeReq, self)
 
     case resp: HttpResponse =>
-      // when the response comes back, upgrade the connnection pipeline
-      sender ! Sockets.UpgradeClient(self)()
-
-    case Sockets.Upgraded =>
-      // send a websocket frame when the upgrade is complete
+      // by the time this comes back, the server's pipeline should
+      // already be upgraded
       sender ! Frame(
         opcode = OpCode.Text,
         maskingKey = Some(12345),
         data = ByteString("i am cow")
       )
+
+    case Sockets.Upgraded =>
+      // The client's pipeline is upgraded, but the server's may not be
 
     case f: Frame =>
       result = f // save the result
@@ -112,7 +111,7 @@ Origin: http://example.com
 SocketServer response:
 ```
 
-This is the client half of the websocket handshake, which your `MessageHandler` will receive as a `HttpRequest`. If you want to accept it and upgrade into a websocket connection, you must reply with a `HttpResponse` which looks like
+This is the client half of the websocket handshake, which your `MessageHandler` will receive as a `HttpRequest`. If you want to accept it and upgrade into a websocket connection, you must upgrade the connection with a `HttpResponse` which looks like
 
 ```
 HTTP/1.1 101 Switching Protocols
@@ -130,12 +129,14 @@ When you're done with the handshake, you must reply with an `Sockets.UpgradeServ
 
 ```scala
 object UpgradeServer{
-  def apply(frameHandler: ActorRef,
+  def apply(resp: HttpResponse,
+            frameHandler: ActorRef,
             frameSizeLimit: Int = Int.MaxValue)
            (implicit extraStages: ServerPipelineStage = EmptyPipelineStage) = ...
 }
 object UpgradeClient{
-  def apply(frameHandler: ActorRef,
+  def apply(req: HttpRequest,
+            frameHandler: ActorRef,
             frameSizeLimit: Int = Int.MaxValue,
             maskGen: () => Int = () => util.Random.nextInt())
            (implicit extraStages: ClientPipelineStage = AutoPong(maskGen)) = ...
@@ -143,6 +144,8 @@ object UpgradeClient{
 ```
 
 The `frameHandler` is the actor that will receive the websocket traffic. It can be the same one, as in the example above, or a different actor. `frameSizeLimit` specifies how big frames are allowed to get before being rejected. `extraStages` allows you to inject extra behavior into the websocket pipeline, the value of which will be explained later.
+
+Note how the handshake's `req` and `resp` are part of the `Upgrade` message. This ensures that the response handling and upgrading appears to happen atomically to the outside world, avoiding race conditions.
 
 ###Define a proper frameHandler 
 
@@ -155,7 +158,7 @@ to the sender of the `Upgraded` message. Each `Frame` is defined as:
 
 ```scala
 case class Frame(FIN: Boolean = true,
-                 RSV: (Boolean, Boolean, Boolean) = (false, false, false),
+                 RSV: byte = 0,
                  opcode: OpCode,
                  maskingKey: Option[Int] = None,
                  data: ByteString = ByteString.empty)

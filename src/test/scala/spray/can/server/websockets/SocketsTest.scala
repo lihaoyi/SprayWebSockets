@@ -65,7 +65,6 @@ class SocketsTest extends FreeSpec with Eventually{
 
     var ready = false
     def receive = {
-
       case x: HttpResponse =>
         println("Client Response")
         connection = sender
@@ -86,7 +85,6 @@ class SocketsTest extends FreeSpec with Eventually{
         println("Client Frame " + f)
         ready = true
         commander ! f
-
 
       case "ready?" =>
         sender ! ready

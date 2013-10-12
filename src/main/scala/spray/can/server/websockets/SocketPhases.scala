@@ -189,7 +189,6 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
         case FrameEvent(f @ Frame(true, 0, Ping | Pong | ConnectionClose, _, data))
           if data.length > 125 =>
           commandPL(Tcp.Close)
-          //SocketPhases.close(commandPL, CloseCode.ProtocolError.statusCode, "Control frames too large: " + data.length)
 
         // handle close requests
         case FrameEvent(f @ Frame(true, 0, ConnectionClose, frameMask, data)) =>
@@ -257,9 +256,9 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
  * be correct!
  */
 object Utf8Checker{
-  val Utf8Accept = 0
-  val Utf8Reject = 12
-  val types = Array[Byte](
+  private[this] val Utf8Accept = 0
+  private[this] val Utf8Reject = 12
+  private[this] val types = Array[Byte](
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -272,7 +271,7 @@ object Utf8Checker{
     3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 3, 3, 11, 6, 6, 6, 5, 8, 8, 8, 8, 8,
     8, 8, 8, 8, 8, 8
   )
-  val states = Array[Byte](
+  private[this] val states = Array[Byte](
     0, 12, 24, 36, 60, 96, 84, 12, 12, 12, 48, 72, 12, 12, 12, 12, 12, 12, 12,
     12, 12, 12, 12, 12, 12, 0, 12, 12, 12, 12, 12, 0, 12, 0, 12, 12, 12, 24,
     12, 12, 12, 12, 12, 24, 12, 24, 12, 12, 12, 12, 12, 12, 12, 12, 12, 24, 12,
@@ -287,7 +286,7 @@ object Utf8Checker{
     while(i < bytes.length && state != Utf8Reject){
       val b = bytes(i)
       val t = types(b & 0xff)
-        codep =  if (state != Utf8Accept) b & 0x3f | codep << 6 else 0xff >> t & b
+        codep = if (state != Utf8Accept) b & 0x3f | codep << 6 else 0xff >> t & b
       state = states(state + t)
 
       i+= 1

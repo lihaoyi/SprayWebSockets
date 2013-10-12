@@ -32,15 +32,14 @@ class SocketExample extends FreeSpec with Eventually{
 
     class SocketServer extends Actor{
       def receive = {
-
         case x: Tcp.Connected => sender ! Register(self) // normal Http server init
 
         case req: HttpRequest =>
           // Upgrade the connection to websockets if you think the incoming
           // request looks good
           if (true){
-
-            sender ! Sockets.UpgradeServer(Sockets.acceptAllFunction(req), self) // upgrade the pipeline
+            // upgrade the pipeline
+            sender ! Sockets.UpgradeServer(Sockets.acceptAllFunction(req), self)
           }
 
         case Sockets.Upgraded => // do nothing
@@ -60,20 +59,20 @@ class SocketExample extends FreeSpec with Eventually{
 
       def receive = {
         case x: Tcp.Connected =>
-          sender ! Register(self) // normal Http client init
-          sender ! Sockets.UpgradeClient(upgradeReq, self)// send an upgrade request immediately when connected
+          // send an upgrade request immediately when connected
+          sender ! Sockets.UpgradeClient(upgradeReq, self)
 
         case resp: HttpResponse =>
-          // when the response comes back, upgrade the connnection pipeline
-
-
-        case Sockets.Upgraded =>
-          // send a websocket frame when the upgrade is complete
+          // by the time this comes back, the server's pipeline should
+          // already be upgraded
           sender ! Frame(
             opcode = OpCode.Text,
             maskingKey = Some(12345),
             data = ByteString("i am cow")
           )
+
+        case Sockets.Upgraded =>
+          // The client's pipeline is upgraded, but the server's may not be
 
         case f: Frame =>
           result = f // save the result
