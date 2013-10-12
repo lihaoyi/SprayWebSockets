@@ -12,7 +12,7 @@ import akka.actor.{Props, Actor, ActorRef}
 import spray.can.server.websockets.Sockets.Upgraded
 import concurrent.duration.{FiniteDuration, Duration, Deadline}
 import akka.io.Tcp
-import java.nio.charset.CharacterCodingException
+import java.nio.charset.{Charset, CharacterCodingException}
 import java.io.DataInputStream
 import spray.can.Http
 import spray.can.parsing.{Result, HttpResponsePartParser, ParserSettings}
@@ -199,8 +199,9 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
             !CloseCode.statusCodes.contains(c) && !(c >= 3000 && c < 5000) ||
             c == 1005 || c == 1006 || c == 1015
           )
-
-          if (data.length == 1 || erroredCode) {
+          if (!Utf8Checker.validate(data.drop(2).toArray)){
+            SocketPhases.close(commandPL, CloseCode.ProtocolError, "Close reason not UTF-8")
+          }else if (data.length == 1 || erroredCode) {
             SocketPhases.close(commandPL, CloseCode.ProtocolError, "Received illegal close code")
           }else{
             SocketPhases.close(commandPL, CloseCode.NormalClosure, "Closing connection")
@@ -230,14 +231,8 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
             SocketPhases.close(commandPL, CloseCode.MessageTooBig, "Message exceeds maximum size of " + maxMessageLength)
           }else{
             val result = stored.fold(f)(x => x.copy(data = x.data ++ f.data))
-            if (result.opcode == OpCode.Text) {
-              try{
-                result.stringData
-                eventPL(FrameEvent(result.copy(FIN=true, data = result.data.compact)))
-              }catch{ case _: CharacterCodingException | _: ArrayIndexOutOfBoundsException=>
-                commandPL(Tcp.Close)
-
-              }
+            if (result.opcode == OpCode.Text && !Utf8Checker.validate(result.data.toArray)) {
+              commandPL(Tcp.Close)
             }else{
               eventPL(FrameEvent(result.copy(FIN=true, data = result.data.compact)))
             }
@@ -250,6 +245,55 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
         case msg => eventPL(msg)
       }
     }
+
+}
+
+/**
+ * Manual state-machine based UTF-8 validator, shamelessly stolen from the
+ * Netty code base and translated into Scala, because Java doesn't provide any
+ * non-broken ways of validating UTF-8 (WTF-1111!!!)
+ *
+ * I have no idea how this works, but it makes the unit tests pass, so it must
+ * be correct!
+ */
+object Utf8Checker{
+  val Utf8Accept = 0
+  val Utf8Reject = 12
+  val types = Array[Byte](
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 9, 9, 9, 9, 9, 9,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 2, 2, 2, 2, 2, 2,
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 10,
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 3, 3, 11, 6, 6, 6, 5, 8, 8, 8, 8, 8,
+    8, 8, 8, 8, 8, 8
+  )
+  val states = Array[Byte](
+    0, 12, 24, 36, 60, 96, 84, 12, 12, 12, 48, 72, 12, 12, 12, 12, 12, 12, 12,
+    12, 12, 12, 12, 12, 12, 0, 12, 12, 12, 12, 12, 0, 12, 0, 12, 12, 12, 24,
+    12, 12, 12, 12, 12, 24, 12, 24, 12, 12, 12, 12, 12, 12, 12, 12, 12, 24, 12,
+    12, 12, 12, 12, 24, 12, 12, 12, 12, 12, 12, 12, 24, 12, 12, 12, 12, 12, 12,
+    12, 12, 12, 36, 12, 36, 12, 12, 12, 36, 12, 12, 12, 12, 12, 36, 12, 36, 12,
+    12, 12, 36, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12
+  )
+  def validate(bytes: Array[Byte]): Boolean = {
+    var codep = 0
+    var state = Utf8Accept
+    var i = 0
+    while(i < bytes.length && state != Utf8Reject){
+      val b = bytes(i)
+      val t = types(b & 0xff)
+        codep =  if (state != Utf8Accept) b & 0x3f | codep << 6 else 0xff >> t & b
+      state = states(state + t)
+
+      i+= 1
+    }
+    state == Utf8Accept
+  }
 }
 
 /**
@@ -275,13 +319,13 @@ case class FrameParsing(maxMessageLength: Int) extends PipelineStage {
 
           var success = true
           while(success){
-            val oldPosition = streamBuffer.readPos
+            streamBuffer.inputStream.mark(0)
             model.Frame.read(dataInput, maxMessageLength) match {
               case Successful(frame) =>
                 eventPL(FrameEvent(frame))
 
               case Incomplete =>
-                streamBuffer.readPos = oldPosition
+                streamBuffer.inputStream.reset()
                 success = false
 
               case TooLarge =>
