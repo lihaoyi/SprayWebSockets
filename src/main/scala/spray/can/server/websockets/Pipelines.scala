@@ -1,10 +1,12 @@
-package spray.can.server.websockets
+package spray.can.server
+package websockets
 
 import spray.can.client._
 import spray.io._
 import spray.can.server._
 import spray.can.server.StatsSupport.StatsHolder
-import spray.can.server.websockets.Sockets.Upgraded
+import spray.can.{Http, HttpExt}
+import Sockets.Upgraded
 import akka.io.Tcp
 import spray.can.{Http, HttpExt}
 import akka.actor.ActorRef
@@ -12,19 +14,20 @@ import spray.can.parsing.{Result, HttpResponsePartParser, ParserSettings}
 import spray.http._
 import akka.util.CompactByteString
 import spray.can.Http.MessageCommand
-
+import spray.can.server.StatsSupport.StatsHolder
 
 /**
  * Sister class to HttpListener, but with a pipeline that supports websockets
  */
-class SocketListener(bindCommander: ActorRef,
+private class SocketListener(bindCommander: ActorRef,
                      bind: Http.Bind,
                      httpSettings: HttpExt#Settings) extends HttpListener(bindCommander, bind, httpSettings){
-
-  override val pipelineStage = SocketListener.pipelineStage(settings, statsHolder)
+  private[this] val settingsX = bind.settings getOrElse ServerSettings(context.system)
+  private[this] val statsHolderX = if (settingsX.statsSupport) Some(new StatsHolder) else None
+  val pipelineStage = SocketListener.pipelineStage(settingsX, statsHolderX)
 }
 
-object SocketListener{
+private object SocketListener{
 
   def pipelineStage(settings: ServerSettings, statsHolder: Option[StatsHolder]) = {
     import settings._
@@ -36,12 +39,12 @@ object SocketListener{
         RemoteAddressHeaderSupport ? remoteAddressHeader >>
         RequestParsing(settings) >>
         ResponseRendering(settings) >>
-        ConnectionTimeouts(idleTimeout) ? (reapingCycle.isFinite && idleTimeout.isFinite)
+        ConnectionTimeouts(timeouts.idleTimeout) ? (reapingCycle.isFinite && timeouts.idleTimeout.isFinite)
     ){case x: Sockets.UpgradeServer =>
       (x.pipeline, x.resp)
     } >>
-      SslTlsSupport ? sslEncryption >>
-      TickGenerator(reapingCycle) ? (reapingCycle.isFinite && (idleTimeout.isFinite || requestTimeout.isFinite))
+      SslTlsSupport(maxEncryptionChunkSize, parserSettings.sslSessionInfoHeader) ? sslEncryption >>
+      TickGenerator(reapingCycle) ? (reapingCycle.isFinite && (timeouts.idleTimeout.isFinite || timeouts.requestTimeout.isFinite))
   }
 }
 case class Switching[T <: PipelineContext](stage1: RawPipelineStage[T])
@@ -71,27 +74,3 @@ case class Switching[T <: PipelineContext](stage1: RawPipelineStage[T])
       }
     }
 }
-
-private[can] class SocketClientSettingsGroup(settings: ClientConnectionSettings,
-                                             httpSettings: HttpExt#Settings) extends HttpClientSettingsGroup(settings, httpSettings){
-
-  override val pipelineStage = SocketClientConnection.pipelineStage(settings)
-}
-
-object SocketClientConnection{
-  def pipelineStage(settings: ClientConnectionSettings): RawPipelineStage[SslTlsContext] = {
-    import settings._
-    Switching(
-      ClientFrontend(requestTimeout) >>
-        ResponseChunkAggregation(responseChunkAggregationLimit) ? (responseChunkAggregationLimit > 0) >>
-        ResponseParsing(parserSettings) >>
-        RequestRendering(settings) >>
-        ConnectionTimeouts(idleTimeout) ? (reapingCycle.isFinite && idleTimeout.isFinite)
-    ){case x: Sockets.UpgradeClient =>
-      (x.pipeline >> OneShotResponseParsing(parserSettings), x.req)
-    } >>
-      SslTlsSupport ? sslEncryption >>
-      TickGenerator(reapingCycle) ? (idleTimeout.isFinite || requestTimeout.isFinite)
-  }
-}
-

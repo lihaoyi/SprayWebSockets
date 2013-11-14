@@ -11,15 +11,8 @@ import akka.util.ByteString
 import spray.http.{HttpResponse, HttpHeaders, HttpMethods, HttpRequest}
 import akka.io.Tcp.Register
 import scala.concurrent.duration._
-import HttpHeaders._
-import spray.can.server.ServerSettings
-import akka.testkit.TestActorRef
-import java.net.InetSocketAddress
-import org.java_websocket.WebSocket
-import org.java_websocket.handshake.ClientHandshake
-
 class AutoBahn extends FreeSpec with Eventually{
-
+/*
   "Server" in {
     implicit val system = ActorSystem()
     implicit val ec = system.dispatcher
@@ -47,7 +40,7 @@ class AutoBahn extends FreeSpec with Eventually{
     )
 
     Thread.sleep(100000000000000000L)
-  }
+  }*/
   /*"Client" in {
     //"/runCase?case=1&agent=cow/0.6.3"
     implicit val system = ActorSystem()

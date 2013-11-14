@@ -11,9 +11,9 @@ import spray.http.{HttpResponse, HttpHeaders, HttpMethods, HttpRequest}
 import akka.testkit.TestActorRef
 import org.scalatest.concurrent.Eventually
 
-import spray.can.Http
+import spray.can.{Http}
 import scala.Some
-import spray.can.server.websockets.Sockets.{ClientPipelineStage, ServerPipelineStage, RoundTripTime}
+import Sockets.{ClientPipelineStage, ServerPipelineStage, RoundTripTime}
 import akka.io.IO
 import akka.io.Tcp.Connected
 import akka.io.Tcp.Register
@@ -71,10 +71,12 @@ class SocketsTest extends FreeSpec with Eventually{
 
 
       case x: Http.Connected =>
+        println("Client Connected")
         connection = sender
         connection ! Sockets.UpgradeClient(req, self, maskGen = () => 31337)(extraStages)
 
-      case Sockets.Upgraded => println("Client Upgraded")
+      case Sockets.Upgraded =>
+        println("Client Upgraded")
 
       case Util.Send(frame) =>
         println("Client Send " + frame)
@@ -91,6 +93,7 @@ class SocketsTest extends FreeSpec with Eventually{
         commander = sender
 
       case Util.Listen =>
+        println("Client Listen")
         commander = sender
 
       case x => println("Client Unknown " + x)
@@ -123,7 +126,12 @@ class SocketsTest extends FreeSpec with Eventually{
 
     val client = system.actorOf(Props(clientActor(ssl)))
 
-    IO(Sockets).!(Http.Connect("localhost", port, settings=Some(ClientConnectionSettings(system).copy(sslEncryption = ssl))))(client)
+    IO(Sockets).!(Http.Connect(
+      "localhost",
+      port,
+      settings = Some(ClientConnectionSettings(system)),
+      sslEncryption = ssl
+    ))(client)
 
 
 

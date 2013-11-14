@@ -3,7 +3,7 @@ package spray.can.server.websockets
 import org.scalatest.FreeSpec
 import org.scalatest.concurrent.Eventually
 import akka.io.{Tcp, IO}
-import spray.can.Http
+import spray.can.{Http}
 import spray.can.server.ServerSettings
 import akka.actor.{ActorRef, ActorSystem, Actor}
 import spray.can.server.websockets.model.{OpCode, Frame}

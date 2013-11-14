@@ -9,14 +9,18 @@ import spray.io.TickGenerator.Tick
 import akka.util.{CompactByteString, ByteString}
 import akka.actor.{Props, Actor, ActorRef}
 
-import spray.can.server.websockets.Sockets.Upgraded
+import spray.can.{Http}
+import Sockets.Upgraded
 import concurrent.duration.{FiniteDuration, Duration, Deadline}
 import akka.io.Tcp
 import java.nio.charset.{Charset, CharacterCodingException}
 import java.io.DataInputStream
 import spray.can.Http
-import spray.can.parsing.{Result, HttpResponsePartParser, ParserSettings}
-import spray.http.HttpMethods
+import spray.can.parsing.{Parser, Result, HttpResponsePartParser, ParserSettings}
+import spray.http.{HttpHeader, HttpMethods}
+import scala.annotation.tailrec
+import spray.http.HttpHeaders.`Content-Type`
+import spray.can.parsing.Result.IgnoreAllFurtherInput
 
 /**
  * Stores handy socket pipeline related stuff
@@ -345,28 +349,40 @@ case class FrameParsing(maxMessageLength: Int) extends PipelineStage {
 object OneShotResponseParsing {
   def apply(settings: ParserSettings): PipelineStage = {
     new PipelineStage {
-      val parser = new HttpResponsePartParser(settings)()
-      parser.startResponse(HttpMethods.GET)
+      var remainingData: ByteString = null
+      var parser: Parser = new HttpResponsePartParser(settings)(){
+        override def parseFixedLengthBody(headers: List[HttpHeader], input: ByteString, bodyStart: Int, length: Long,
+                                 cth: Option[`Content-Type`], closeAfterResponseCompletion: Boolean): Result =
+          if (bodyStart.toLong + length <= input.length) {
+            val offset = bodyStart + length.toInt
+            val msg = message(headers, entity(cth, input.slice(bodyStart, offset)))
+            emit(msg, closeAfterResponseCompletion) {
+              remainingData = input.drop(offset)
+              IgnoreAllFurtherInput
+            }
+          } else needMoreData(input, bodyStart)(parseFixedLengthBody(headers, _, _, length, cth, closeAfterResponseCompletion))
+
+        setRequestMethodForNextResponse(HttpMethods.GET)
+      }
+
       var active = true
       def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
         new Pipelines {
-
-          def parse(data: CompactByteString): Unit =
-            parser.parse(data) match {
-              case Result.NeedMoreData => // just wait for the next packet
-              case Result.ParsingError(_, info) =>
-                commandPL(Http.Close)
-              case Result.Ok(part, remainingData, _) ⇒
-                active = false
-                eventPL(Http.MessageEvent(part))
-                eventPL(Tcp.Received(remainingData))
-              case x =>
-            }
+          @tailrec def handle(result: Result): Unit = result match {
+            case Result.NeedMoreData(next) => parser = next
+            case Result.Emit(part, closeAfterResponseCompletion, continue) =>
+              eventPL(Http.MessageEvent(part))
+              eventPL(Tcp.Received(remainingData))
+              handle(continue())
+            case Result.Expect100Continue(continue) => handle(continue())
+            case Result.ParsingError(status, info) => commandPL(Http.Close)
+            case Result.IgnoreAllFurtherInput =>
+          }
 
           val commandPipeline: CPL = commandPL
 
           val eventPipeline: EPL = {
-            case Tcp.Received(data: CompactByteString) if active => parse(data)
+            case Tcp.Received(data: CompactByteString) if active => handle(parser(data))
             case ev ⇒ eventPL(ev)
           }
         }
