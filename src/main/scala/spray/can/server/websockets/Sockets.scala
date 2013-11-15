@@ -35,8 +35,6 @@ object Sockets extends ExtensionKey[SocketExt]{
   class UpgradeServer(val resp: HttpResponse, val pipeline: ServerPipelineStage) extends Command
   class UpgradeClient(val req: HttpRequest, val pipeline: ClientPipelineStage) extends Command
 
-
-
   object UpgradeServer{
     def apply(resp: HttpResponse,
               frameHandler: ActorRef,
@@ -119,6 +117,7 @@ class SocketExt(system: ExtendedActorSystem) extends HttpExt(system){
  */
 private class SocketManager(httpSettings: HttpExt#Settings) extends HttpManager(httpSettings){
   override def newHttpListener(commander: ActorRef, bind: Http.Bind, httpSettings: HttpExt#Settings) = {
+    println("New SocketListener")
     new SocketListener(commander, bind, httpSettings)
   }
   override def newHttpClientSettingsGroup(settings: ClientConnectionSettings, httpSettings: HttpExt#Settings) = {

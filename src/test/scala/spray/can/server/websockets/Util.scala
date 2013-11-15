@@ -29,14 +29,12 @@ import scala.concurrent.Await
 object Util extends Eventually{
   def createSslContext(keyStoreResource: String, password: String): SSLContext = {
     val keyStore = KeyStore.getInstance("jks")
-    val res = getClass.getResourceAsStream(keyStoreResource)
-    require(res != null)
-    keyStore.load(res, password.toCharArray)
+    keyStore.load(getClass.getResourceAsStream(keyStoreResource), password.toCharArray)
     val keyManagerFactory = KeyManagerFactory.getInstance("SunX509")
     keyManagerFactory.init(keyStore, password.toCharArray)
     val trustManagerFactory = TrustManagerFactory.getInstance("SunX509")
     trustManagerFactory.init(keyStore)
-    val context = SSLContext.getInstance("SSL")
+    val context = SSLContext.getInstance("TLS")
     context.init(keyManagerFactory.getKeyManagers, trustManagerFactory.getTrustManagers, new SecureRandom)
     context
   }

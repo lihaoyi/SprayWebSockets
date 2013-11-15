@@ -17,10 +17,14 @@ import java.nio.charset.{Charset, CharacterCodingException}
 import java.io.DataInputStream
 import spray.can.Http
 import spray.can.parsing.{Parser, Result, HttpResponsePartParser, ParserSettings}
-import spray.http.{HttpHeader, HttpMethods}
+import spray.http._
 import scala.annotation.tailrec
-import spray.http.HttpHeaders.`Content-Type`
+import spray.http.HttpHeaders.{`Transfer-Encoding`, `Content-Length`, `Content-Type`}
 import spray.can.parsing.Result.IgnoreAllFurtherInput
+import scala.Some
+import spray.can.server.websockets.SocketPhases.FrameEvent
+import spray.can.server.websockets.model.Frame.Successful
+import spray.can.server.websockets.SocketPhases.FrameCommand
 
 /**
  * Stores handy socket pipeline related stuff
@@ -349,19 +353,15 @@ case class FrameParsing(maxMessageLength: Int) extends PipelineStage {
 object OneShotResponseParsing {
   def apply(settings: ParserSettings): PipelineStage = {
     new PipelineStage {
-      var remainingData: ByteString = null
+      var remainingData: Option[ByteString] = None
       var parser: Parser = new HttpResponsePartParser(settings)(){
-        override def parseFixedLengthBody(headers: List[HttpHeader], input: ByteString, bodyStart: Int, length: Long,
-                                 cth: Option[`Content-Type`], closeAfterResponseCompletion: Boolean): Result =
-          if (bodyStart.toLong + length <= input.length) {
-            val offset = bodyStart + length.toInt
-            val msg = message(headers, entity(cth, input.slice(bodyStart, offset)))
-            emit(msg, closeAfterResponseCompletion) {
-              remainingData = input.drop(offset)
-              IgnoreAllFurtherInput
-            }
-          } else needMoreData(input, bodyStart)(parseFixedLengthBody(headers, _, _, length, cth, closeAfterResponseCompletion))
-
+        override def parseEntity(headers: List[HttpHeader], input: ByteString, bodyStart: Int, clh: Option[`Content-Length`],
+                                 cth: Option[`Content-Type`], teh: Option[`Transfer-Encoding`], hostHeaderPresent: Boolean,
+                                 closeAfterResponseCompletion: Boolean): Result = {
+          remainingData = Some(input.drop(bodyStart))
+          active = false
+          emit(message(headers, HttpEntity.Empty), closeAfterResponseCompletion) {Result.IgnoreAllFurtherInput}
+        }
         setRequestMethodForNextResponse(HttpMethods.GET)
       }
 
@@ -369,14 +369,23 @@ object OneShotResponseParsing {
       def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
         new Pipelines {
           @tailrec def handle(result: Result): Unit = result match {
-            case Result.NeedMoreData(next) => parser = next
+            case Result.NeedMoreData(next) =>
+              println("A")
+              parser = next
             case Result.Emit(part, closeAfterResponseCompletion, continue) =>
+              println("B " + part)
+
               eventPL(Http.MessageEvent(part))
-              eventPL(Tcp.Received(remainingData))
+              eventPL(Tcp.Received(remainingData.get))
               handle(continue())
-            case Result.Expect100Continue(continue) => handle(continue())
-            case Result.ParsingError(status, info) => commandPL(Http.Close)
+            case Result.Expect100Continue(continue) =>
+              println("C")
+              handle(continue())
+            case Result.ParsingError(status, info) =>
+              println("D")
+              commandPL(Http.Close)
             case Result.IgnoreAllFurtherInput =>
+              println("E")
           }
 
           val commandPipeline: CPL = commandPL

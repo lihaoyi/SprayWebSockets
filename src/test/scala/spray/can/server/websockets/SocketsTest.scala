@@ -11,7 +11,7 @@ import spray.http.{HttpResponse, HttpHeaders, HttpMethods, HttpRequest}
 import akka.testkit.TestActorRef
 import org.scalatest.concurrent.Eventually
 
-import spray.can.{Http}
+import spray.can.Http
 import scala.Some
 import Sockets.{ClientPipelineStage, ServerPipelineStage, RoundTripTime}
 import akka.io.IO
@@ -19,15 +19,23 @@ import akka.io.Tcp.Connected
 import akka.io.Tcp.Register
 import spray.can.server.ServerSettings
 import spray.can.client.ClientConnectionSettings
-import spray.io.EmptyPipelineStage
+import spray.io.{ServerSSLEngineProvider, ClientSSLEngineProvider, EmptyPipelineStage}
+import javax.net.ssl.SSLContext
 
 class SocketsTest extends FreeSpec with Eventually{
   implicit def string2bytestring(s: String) = ByteString(s)
   implicit val system = ActorSystem()
   implicit val timeout = akka.util.Timeout(5 seconds)
 
-  implicit val sslContext = Util.createSslContext("/ssl-test-keystore.jks", "")
-
+  implicit val sslContext: SSLContext = Util.createSslContext("/ssl-test-keystore.jks", "")
+  implicit val clientEngineProvider = ClientSSLEngineProvider { engine =>
+    println("clientEngineProvider")
+    engine
+  }
+  implicit val serverEngineProvider = ServerSSLEngineProvider { engine =>
+    println("serverEngineProvider")
+    engine
+  }
   import scala.concurrent.duration.Duration
   /**
    * Webserver which always accepts websocket upgrade requests. Also doubles as
@@ -39,6 +47,7 @@ class SocketsTest extends FreeSpec with Eventually{
     var count = 0
     def receive = {
       case req: HttpRequest =>
+        println("Server Receive")
         sender ! Sockets.UpgradeServer(
           Sockets.acceptAllFunction(req),
           self,
@@ -50,6 +59,7 @@ class SocketsTest extends FreeSpec with Eventually{
         sender ! Frame(fin, rsv, Text, None, f.stringData.toUpperCase + count)
 
       case x: Connected =>
+        println("Server Connected")
         sender ! Register(self)
 
       case Sockets.Upgraded =>
@@ -66,25 +76,19 @@ class SocketsTest extends FreeSpec with Eventually{
     var ready = false
     def receive = {
       case x: HttpResponse =>
-        println("Client Response")
         connection = sender
 
-
       case x: Http.Connected =>
-        println("Client Connected")
         connection = sender
         connection ! Sockets.UpgradeClient(req, self, maskGen = () => 31337)(extraStages)
 
       case Sockets.Upgraded =>
-        println("Client Upgraded")
 
       case Util.Send(frame) =>
-        println("Client Send " + frame)
         commander = sender
         connection ! frame
 
       case f: Frame =>
-        println("Client Frame " + f)
         ready = true
         commander ! f
 
@@ -93,7 +97,6 @@ class SocketsTest extends FreeSpec with Eventually{
         commander = sender
 
       case Util.Listen =>
-        println("Client Listen")
         commander = sender
 
       case x => println("Client Unknown " + x)
@@ -120,18 +123,20 @@ class SocketsTest extends FreeSpec with Eventually{
       "localhost",
       port,
       settings=Some(ServerSettings(system).copy(sslEncryption = ssl))
-    )
+    )(serverEngineProvider)
 
     import akka.pattern._
 
     val client = system.actorOf(Props(clientActor(ssl)))
 
-    IO(Sockets).!(Http.Connect(
-      "localhost",
-      port,
-      settings = Some(ClientConnectionSettings(system)),
-      sslEncryption = ssl
-    ))(client)
+    IO(Sockets).!(
+      Http.Connect(
+        "localhost",
+        port,
+        settings = Some(ClientConnectionSettings(system)),
+        sslEncryption = ssl
+      )
+    )(client)
 
 
 
@@ -302,38 +307,3 @@ class SocketsTest extends FreeSpec with Eventually{
   }
 
 }
-//
-//Testing started at 12:40 AM ...
-//Client Connected
-//FP Command Down Tell(Actor[akka://default/user/$a#-597652527],Upgraded,Actor[akka://default/user/IO-SOCKET/group-0/0/$a#616726173])
-//Client Upgraded
-//FP Command Down Tell(Actor[akka://default/user/$a#-597652527],HttpResponse(101 Switching Protocols,EmptyEntity,List(Sec-WebSocket-Accept: HSmrc0sMlYUkAGmm5OPpG2HaGWk=, Connection: Upgrade, Upgrade: WebSocket, Server: AutobahnTestSuite/0.6.0-0.6.3),HTTP/1.1),Actor[akka://default/user/IO-SOCKET/group-0/0/$a#616726173])
-//Client Response
-//FP Frame Up Frame(true,0,Text,None,ByteString())
-//FP Command Down Tell(Actor[akka://default/user/$a#-597652527],Frame(true,0,Text,None,ByteString()),Actor[akka://default/user/IO-SOCKET/group-0/0/$a#616726173])
-//Client Frame
-//FP Frame Down FrameCommand(Frame(true,0,Text,Some(31337),ByteString()))
-//FP Frame Up Frame(true,0,ConnectionClose,None,ByteString(3, -24))
-//FP Command Down Write(ByteString(-120, 2, 3, -24),NoAck(null))
-//FP Command Down Close
-//FP Command Down Tell(Actor[akka://default/user/$a#-597652527],Frame(true,0,ConnectionClose,None,ByteString(3, -24)),Actor[akka://default/user/IO-SOCKET/group-0/0/$a#616726173])
-//Client Unknown Frame(true,0,ConnectionClose,None,ByteString(3, -24))
-
-//C:\Runtimes\Java\bin\java -Dvisualvm.id=98109893530530 -Didea.launcher.port=7537 -Didea.launcher.bin.path=C:\Programs\IntelliJ\bin -Dfile.encoding=UTF-8 -classpath C:\Users\Haoyi\.IntelliJIdea12\config\plugins\Scala\lib\scala-plugin-runners.jar;C:\Runtimes\Java\jre\lib\charsets.jar;C:\Runtimes\Java\jre\lib\deploy.jar;C:\Runtimes\Java\jre\lib\javaws.jar;C:\Runtimes\Java\jre\lib\jce.jar;C:\Runtimes\Java\jre\lib\jfr.jar;C:\Runtimes\Java\jre\lib\jfxrt.jar;C:\Runtimes\Java\jre\lib\jsse.jar;C:\Runtimes\Java\jre\lib\management-agent.jar;C:\Runtimes\Java\jre\lib\plugin.jar;C:\Runtimes\Java\jre\lib\resources.jar;C:\Runtimes\Java\jre\lib\rt.jar;C:\Runtimes\Java\jre\lib\ext\access-bridge-64.jar;C:\Runtimes\Java\jre\lib\ext\dnsns.jar;C:\Runtimes\Java\jre\lib\ext\jaccess.jar;C:\Runtimes\Java\jre\lib\ext\localedata.jar;C:\Runtimes\Java\jre\lib\ext\sunec.jar;C:\Runtimes\Java\jre\lib\ext\sunjce_provider.jar;C:\Runtimes\Java\jre\lib\ext\sunmscapi.jar;C:\Runtimes\Java\jre\lib\ext\zipfs.jar;C:\Dropbox\Workspace\WebSockets\target\scala-2.10\test-classes;C:\Dropbox\Workspace\WebSockets\target\scala-2.10\classes;C:\Users\Haoyi\.sbt\boot\scala-2.10.2\lib\scala-library.jar;C:\Users\Haoyi\.ivy2\cache\io.spray\spray-can\jars\spray-can-1.2-M8.jar;C:\Users\Haoyi\.ivy2\cache\io.spray\spray-io\jars\spray-io-1.2-M8.jar;C:\Users\Haoyi\.ivy2\cache\io.spray\spray-util\jars\spray-util-1.2-M8.jar;C:\Users\Haoyi\.ivy2\cache\io.spray\spray-http\jars\spray-http-1.2-M8.jar;C:\Users\Haoyi\.ivy2\cache\org.parboiled\parboiled-scala_2.10\jars\parboiled-scala_2.10-1.1.5.jar;C:\Users\Haoyi\.ivy2\cache\org.parboiled\parboiled-scala_2.10\bundles\parboiled-scala_2.10-1.1.5.jar;C:\Users\Haoyi\.ivy2\cache\org.parboiled\parboiled-core\jars\parboiled-core-1.1.5.jar;C:\Users\Haoyi\.ivy2\cache\org.parboiled\parboiled-core\bundles\parboiled-core-1.1.5.jar;C:\Users\Haoyi\.ivy2\cache\io.spray\spray-routing\jars\spray-routing-1.2-M8.jar;C:\Users\Haoyi\.ivy2\cache\io.spray\spray-httpx\jars\spray-httpx-1.2-M8.jar;C:\Users\Haoyi\.ivy2\cache\org.jvnet.mimepull\mimepull\jars\mimepull-1.9.2.jar;C:\Users\Haoyi\.ivy2\cache\com.chuusai\shapeless_2.10\jars\shapeless_2.10-1.2.4.jar;C:\Users\Haoyi\.ivy2\cache\com.typesafe.akka\akka-actor_2.10\jars\akka-actor_2.10-2.2.0-RC1.jar;C:\Users\Haoyi\.ivy2\cache\com.typesafe\config\jars\config-1.0.1.jar;C:\Users\Haoyi\.ivy2\cache\com.typesafe\config\bundles\config-1.0.1.jar;C:\Users\Haoyi\.ivy2\cache\org.java-websocket\Java-WebSocket\jars\Java-WebSocket-1.3.0.jar;C:\Users\Haoyi\.ivy2\cache\io.spray\spray-testkit\jars\spray-testkit-1.2-M8.jar;C:\Users\Haoyi\.ivy2\cache\com.typesafe.akka\akka-testkit_2.10\jars\akka-testkit_2.10-2.2.0-RC1.jar;C:\Users\Haoyi\.ivy2\cache\com.typesafe.akka\akka-testkit_2.10\bundles\akka-testkit_2.10-2.2.0-RC1.jar;C:\Users\Haoyi\.ivy2\cache\org.scalatest\scalatest_2.10\jars\scalatest_2.10-2.0.RC1.jar;C:\Users\Haoyi\.ivy2\cache\org.scala-lang\scala-reflect\jars\scala-reflect-2.10.0.jar;C:\Programs\IntelliJ\lib\idea_rt.jar com.intellij.rt.execution.application.AppMain org.jetbrains.plugins.scala.testingSupport.scalaTest.ScalaTestRunner -s spray.can.server.websockets.AutoBahn -showProgressMessages true -C org.jetbrains.plugins.scala.testingSupport.scalaTest.ScalaTestReporter
-//Testing started at 12:47 AM ...
-//Client Connected
-//FP Command Down Tell(Actor[akka://default/user/$a#1004654038],Upgraded,Actor[akka://default/user/IO-SOCKET/group-0/0/$a#187839070])
-//Client Upgraded
-//FP Command Down Tell(Actor[akka://default/user/$a#1004654038],HttpResponse(101 Switching Protocols,EmptyEntity,List(Sec-WebSocket-Accept: HSmrc0sMlYUkAGmm5OPpG2HaGWk=, Connection: Upgrade, Upgrade: WebSocket, Server: AutobahnTestSuite/0.6.0-0.6.3),HTTP/1.1),Actor[akka://default/user/IO-SOCKET/group-0/0/$a#187839070])
-//Client Response
-//FP Frame Up Frame(true,0,Text,None,ByteString())
-//FP Command Down Tell(Actor[akka://default/user/$a#1004654038],Frame(true,0,Text,None,ByteString()),Actor[akka://default/user/IO-SOCKET/group-0/0/$a#187839070])
-//Client Frame
-//FP Frame Down FrameCommand(Frame(true,0,Text,Some(31337),ByteString()))
-//FP Frame Up Frame(true,0,ConnectionClose,None,ByteString(3, -24))
-//FP Command Down Write(ByteString(-120, 2, 3, -24),NoAck(null))
-//FP Command Down Close
-//FP Command Down Tell(Actor[akka://default/user/$a#1004654038],Frame(true,0,ConnectionClose,None,ByteString(3, -24)),Actor[akka://default/user/IO-SOCKET/group-0/0/$a#187839070])
-//Client Unknown Frame(true,0,ConnectionClose,None,ByteString(3, -24))
-//FP Command Down Tell(Actor[akka://default/user/$a#1004654038],Closed,Actor[akka://default/user/IO-SOCKET/group-0/0/$a#187839070])
-//Client Closed
