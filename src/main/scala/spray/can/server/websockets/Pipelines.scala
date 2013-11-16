@@ -84,7 +84,6 @@ case class Switching[T <: PipelineContext](stage1: RawPipelineStage[T])
       // it is important to introduce the proxy to the var here
       def commandPipeline: CPL = {
         case x if stage2.isDefinedAt(x) =>
-          println("COMMAND A " + x)
           val (pl20, msg) = stage2(x)
           val pl2 = pl20(context, commandPL, eventPL)
           pl1.commandPipeline(MessageCommand(msg))
@@ -92,7 +91,6 @@ case class Switching[T <: PipelineContext](stage1: RawPipelineStage[T])
           commandPLVar = pl2.commandPipeline
           eventPLVar(Upgraded)
         case c =>
-          println("COMMAND B " + c)
           commandPLVar(c)
       }
       def eventPipeline: EPL = {

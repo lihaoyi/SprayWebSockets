@@ -321,7 +321,7 @@ case class FrameParsing(maxMessageLength: Int) extends PipelineStage {
 
       val eventPipeline: EPL = {
         case Tcp.Received(data) =>
-
+          println("Data Received " + data.length)
           streamBuffer.write(data)
 
           var success = true
@@ -360,6 +360,7 @@ object OneShotResponseParsing {
                                  closeAfterResponseCompletion: Boolean): Result = {
           remainingData = Some(input.drop(bodyStart))
           active = false
+          println("remainingData " + remainingData.get.length + " " + input + " " + bodyStart)
           emit(message(headers, HttpEntity.Empty), closeAfterResponseCompletion) {Result.IgnoreAllFurtherInput}
         }
         setRequestMethodForNextResponse(HttpMethods.GET)
@@ -370,29 +371,28 @@ object OneShotResponseParsing {
         new Pipelines {
           @tailrec def handle(result: Result): Unit = result match {
             case Result.NeedMoreData(next) =>
-              println("A")
               parser = next
             case Result.Emit(part, closeAfterResponseCompletion, continue) =>
-              println("B " + part)
-
               eventPL(Http.MessageEvent(part))
               eventPL(Tcp.Received(remainingData.get))
               handle(continue())
             case Result.Expect100Continue(continue) =>
-              println("C")
               handle(continue())
             case Result.ParsingError(status, info) =>
-              println("D")
               commandPL(Http.Close)
             case Result.IgnoreAllFurtherInput =>
-              println("E")
           }
 
           val commandPipeline: CPL = commandPL
 
           val eventPipeline: EPL = {
             case Tcp.Received(data: CompactByteString) if active => handle(parser(data))
-            case ev ⇒ eventPL(ev)
+            case ev @ Tcp.Received(data) =>
+              println("Tcp.Received " + data.length)
+              eventPL(ev)
+            case ev ⇒
+              println(ev)
+              eventPL(ev)
           }
         }
     }

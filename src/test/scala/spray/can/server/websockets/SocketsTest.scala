@@ -29,11 +29,13 @@ class SocketsTest extends FreeSpec with Eventually{
 
   implicit val sslContext: SSLContext = Util.createSslContext("/ssl-test-keystore.jks", "")
   implicit val clientEngineProvider = ClientSSLEngineProvider { engine =>
-    println("clientEngineProvider")
+    engine.setEnabledCipherSuites(Array("TLS_RSA_WITH_AES_128_CBC_SHA"))
+    engine.setEnabledProtocols(Array("SSLv3", "TLSv1"))
     engine
   }
   implicit val serverEngineProvider = ServerSSLEngineProvider { engine =>
-    println("serverEngineProvider")
+    engine.setEnabledCipherSuites(Array("TLS_RSA_WITH_AES_128_CBC_SHA"))
+    engine.setEnabledProtocols(Array("SSLv3", "TLSv1"))
     engine
   }
   import scala.concurrent.duration.Duration
@@ -55,6 +57,7 @@ class SocketsTest extends FreeSpec with Eventually{
         )(extraStages)
 
       case f @ Frame(fin, rsv, Text, maskingKey, data) =>
+        println("Server Frame Received")
         count = count + 1
         sender ! Frame(fin, rsv, Text, None, f.stringData.toUpperCase + count)
 
@@ -65,6 +68,8 @@ class SocketsTest extends FreeSpec with Eventually{
       case Sockets.Upgraded =>
         println("Server Upgraded")
         sender ! Frame(opcode = Text, data = ByteString("Hello"))
+
+      case x => println("Server Unknown " + x)
     }
   }
 
@@ -76,19 +81,24 @@ class SocketsTest extends FreeSpec with Eventually{
     var ready = false
     def receive = {
       case x: HttpResponse =>
+        println("Client Response")
         connection = sender
 
       case x: Http.Connected =>
+        println("Client Connected")
         connection = sender
         connection ! Sockets.UpgradeClient(req, self, maskGen = () => 31337)(extraStages)
 
       case Sockets.Upgraded =>
+        println("Client Upgraded")
 
       case Util.Send(frame) =>
+        println("Client Frame Send")
         commander = sender
         connection ! frame
 
       case f: Frame =>
+        println("Client Frame Received")
         ready = true
         commander ! f
 
@@ -118,12 +128,14 @@ class SocketsTest extends FreeSpec with Eventually{
                       ssl: Boolean) = {
     val reqHandler = system.actorOf(Props(serverActor))
 
-    IO(Sockets) ! Http.Bind(
-      reqHandler,
-      "localhost",
-      port,
-      settings=Some(ServerSettings(system).copy(sslEncryption = ssl))
-    )(serverEngineProvider)
+    IO(Sockets).!(
+      Http.Bind(
+        reqHandler,
+        "localhost",
+        port,
+        settings=Some(ServerSettings(system).copy(sslEncryption = ssl))
+      )
+    )(reqHandler)
 
     import akka.pattern._
 
@@ -169,7 +181,7 @@ class SocketsTest extends FreeSpec with Eventually{
     }
 
     "Testing ability to receive fragmented message" - doTwice(){ connection =>
-
+      println("akka.loglevel is " + com.typesafe.config.ConfigFactory.load().getString("akka.loglevel"))
       val result1 = {
         connection send Frame(FIN = false, opcode = OpCode.Text, maskingKey = Some(12345123), data = "i am cow ")
         connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(2139), data = "hear me moo ")
@@ -179,8 +191,11 @@ class SocketsTest extends FreeSpec with Eventually{
       assert(result1.stringData === "I AM COW HEAR ME MOO I WEIGH TWICE AS MUCH AS YOU AND I LOOK GOOD ON THE BARBECUE 1")
 
       val result2 = {
+        println("5")
         connection send Frame(FIN = false, opcode = OpCode.Text, maskingKey = Some(12345123), data = "yoghurt curds cream cheese and butter ")
+        println("6")
         connection send Frame(FIN = false, opcode = OpCode.Continuation, maskingKey = Some(2139), data = "comes from liquids from my udder ")
+        println("7")
         connection await Frame(opcode = OpCode.Continuation, maskingKey = Some(-23), data = "i am cow, i am cow, hear me moooo ")
       }
       assert(result2.stringData === "YOGHURT CURDS CREAM CHEESE AND BUTTER COMES FROM LIQUIDS FROM MY UDDER I AM COW, I AM COW, HEAR ME MOOOO 2")
@@ -220,6 +235,7 @@ class SocketsTest extends FreeSpec with Eventually{
           connection send Frame(FIN = false, opcode = OpCode.Continuation, data = ByteString("l" * 256), maskingKey = Some(0))
           connection send Frame(FIN = false, opcode = OpCode.Continuation, data = ByteString("l" * 256), maskingKey = Some(0))
           val res1 = connection await Frame(opcode = OpCode.Continuation, data = ByteString("l" * 256), maskingKey = Some(0))
+
           assert(res1.opcode === OpCode.Text)
           assert(res1.stringData === ("L" * 1024 + "1"))
 

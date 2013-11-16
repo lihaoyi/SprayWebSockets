@@ -56,6 +56,7 @@ object Util extends Eventually{
     import akka.pattern._
     implicit val timeout = akka.util.Timeout(5 seconds)
     def send(b: Frame) = {
+      Thread.sleep(25)
       a ! Send(b)
     }
 
@@ -65,7 +66,7 @@ object Util extends Eventually{
      * into an entire frame
      */
     def await(b: Frame): Frame = {
-
+      Thread.sleep(25)
       Await.result(a ? Send(b), 10 seconds).asInstanceOf[Frame]
     }
 
