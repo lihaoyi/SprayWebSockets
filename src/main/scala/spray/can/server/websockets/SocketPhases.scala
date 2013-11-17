@@ -84,7 +84,7 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
         case Sockets.Upgraded           => commandPL(Pipeline.Tell(handler, Upgraded, receiveAdapter))
         case rtt: Sockets.RoundTripTime => commandPL(Pipeline.Tell(handler, rtt, receiveAdapter))
         case Http.MessageEvent(resp: spray.http.HttpResponse) => commandPL(Pipeline.Tell(handler, resp, receiveAdapter))
-        case x => // ignore all other events, e.g. Ticks
+        case x => eventPL(x)
       }
     }
 }
@@ -320,9 +320,7 @@ case class FrameParsing(maxMessageLength: Int) extends PipelineStage {
       }
 
       val eventPipeline: EPL = {
-        case Tcp.Received(data) =>
-          println("Data Received " + data.length)
-          streamBuffer.write(data)
+        case Tcp.Received(data) => streamBuffer.write(data)
 
           var success = true
           while(success){
@@ -360,7 +358,7 @@ object OneShotResponseParsing {
                                  closeAfterResponseCompletion: Boolean): Result = {
           remainingData = Some(input.drop(bodyStart))
           active = false
-          println("remainingData " + remainingData.get.length + " " + input + " " + bodyStart)
+
           emit(message(headers, HttpEntity.Empty), closeAfterResponseCompletion) {Result.IgnoreAllFurtherInput}
         }
         setRequestMethodForNextResponse(HttpMethods.GET)
@@ -387,11 +385,7 @@ object OneShotResponseParsing {
 
           val eventPipeline: EPL = {
             case Tcp.Received(data: CompactByteString) if active => handle(parser(data))
-            case ev @ Tcp.Received(data) =>
-              println("Tcp.Received " + data.length)
-              eventPL(ev)
             case ev ⇒
-              println(ev)
               eventPL(ev)
           }
         }

@@ -48,7 +48,6 @@ private class SocketListener(bindCommander: ActorRef,
 private object SocketListener{
 
   def pipelineStage(settings: ServerSettings, statsHolder: Option[StatsHolder]) = {
-    println("New PipelineStage " + settings.sslEncryption)
     import settings._
     import timeouts._
     Switching(

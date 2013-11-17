@@ -117,7 +117,6 @@ class SocketExt(system: ExtendedActorSystem) extends HttpExt(system){
  */
 private class SocketManager(httpSettings: HttpExt#Settings) extends HttpManager(httpSettings){
   override def newHttpListener(commander: ActorRef, bind: Http.Bind, httpSettings: HttpExt#Settings) = {
-    println("New SocketListener")
     new SocketListener(commander, bind, httpSettings)
   }
   override def newHttpClientSettingsGroup(settings: ClientConnectionSettings, httpSettings: HttpExt#Settings) = {
