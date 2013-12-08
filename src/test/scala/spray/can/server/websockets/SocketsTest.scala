@@ -140,7 +140,7 @@ class SocketsTest extends FreeSpec with Eventually{
     import akka.pattern._
 
     val client = system.actorOf(Props(clientActor(ssl)))
-
+    Thread.sleep(10)
     IO(Sockets).!(
       Http.Connect(
         "localhost",

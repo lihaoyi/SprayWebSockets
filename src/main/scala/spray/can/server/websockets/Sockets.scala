@@ -45,7 +45,8 @@ object Sockets extends ExtensionKey[SocketExt]{
         WebsocketFrontEnd(frameHandler) >>
         extraStages >>
         Consolidation(frameSizeLimit, None) >>
-        FrameParsing(frameSizeLimit)
+        FrameParsing(frameSizeLimit) >>
+        Buffer()
       )
     }
   }
@@ -60,8 +61,8 @@ object Sockets extends ExtensionKey[SocketExt]{
         WebsocketFrontEnd(frameHandler) >>
         extraStages >>
         Consolidation(frameSizeLimit, Some(maskGen)) >>
-        FrameParsing(frameSizeLimit)
-
+        FrameParsing(frameSizeLimit) >>
+        Buffer()
       )
     }
   }
