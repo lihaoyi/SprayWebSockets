@@ -401,40 +401,45 @@ case class Buffer() extends PipelineStage{
   var buffer = new UberBuffer()
   var outstanding = false
   var count = 0
+  var closed = false
   case class Ack(i: Int) extends Event
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines = {
 
     new Pipelines {
       val commandPipeline: CPL = {
-        case Tcp.Write(data, ack) =>
-          println("---Write Received")
+        case Tcp.Write(data, ack) if !closed =>
           eventPL(ack)
           if (!outstanding){
-            println(s"------Forwarding $count")
             outstanding = true
             commandPL(Tcp.Write(data, Ack(count)))
             count += 1
           }else{
-            println("------Buffering")
             buffer.write(data)
           }
+
         case x => commandPL(x)
       }
 
       val eventPipeline: EPL = {
         case Ack(i) =>
-          println(s"---Ack($i) Received")
           if (buffer.readAvailable == 0) {
-            println("---Nothing Left")
             outstanding = false
           }else{
-            println(s"---Sending Buffered $count  ")
             val bytes = new Array[Byte](buffer.inputStream.available())
             buffer.inputStream.read(bytes)
             commandPL(Tcp.Write(ByteString(bytes), Ack(count)))
             count += 1
           }
-        case x => eventPL(x)
+        case Tcp.CommandFailed(Tcp.Write(data, ack)) if !closed =>
+          val bytes = new Array[Byte](buffer.inputStream.available())
+          buffer.inputStream.read(bytes)
+          commandPL(Tcp.Write(data ++ ByteString(bytes), ack))
+
+        case Tcp.Closed =>
+          closed = true
+          eventPL(Tcp.Closed)
+        case x =>
+          eventPL(x)
       }
     }
   }
