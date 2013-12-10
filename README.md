@@ -10,6 +10,17 @@ This is a implementation of a websocket server and client for the spray.io web t
 - Automatically respond to pings with pongs
 - Match up outgoing Pings and incoming Pongs to find round trip times
 - Automatically ping every client according to the `autoPingInterval`, using the `pingGenerator` to generate the body of each ping
+- Pass almost the entire [Autobahn Test Suite](http://autobahn.ws/testsuite/)
+
+`client-report.html` and `sever-report.html` contain the Autobahn test reports for both the server and the client. The only tests currently failing are unicode strictness tests, which means the server isn't killing connections in the case of malformed unicode as strictly as it should.
+
+SprayWebSockets isnt currently hosted on any maven repository; you can add
+
+```scala
+.dependsOn(uri("git://github.com/lihaoyi/SprayWebSockets.git"))
+```
+
+to your `Build.scala` project to make it work
 
 Getting Started
 ---------------
