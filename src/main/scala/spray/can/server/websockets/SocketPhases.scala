@@ -181,8 +181,16 @@ case class AutoPing(interval: Duration = Duration.Inf,
  * else should go on the phases on top of this.
  */
 case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) extends PipelineStage{
+
+
   def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
     new Pipelines {
+      var scratch = new Array[Byte](1024)
+      def validateUtf8(data: ByteString) = {
+        if (data.length > scratch.length) scratch = new Array[Byte](data.length)
+        data.copyToArray(scratch)
+        Utf8Checker.validate(data.toArray)
+      }
 
       var stored: Option[Frame] = None
 
@@ -206,7 +214,7 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
             !CloseCode.statusCodes.contains(c) && !(c >= 3000 && c < 5000) ||
             c == 1005 || c == 1006 || c == 1015
           )
-          if (!Utf8Checker.validate(data.drop(2).toArray)){
+          if (!validateUtf8(data.drop(2))){
             SocketPhases.close(commandPL, CloseCode.ProtocolError, "Close reason not UTF-8")
           }else if (data.length == 1 || erroredCode) {
             SocketPhases.close(commandPL, CloseCode.ProtocolError, "Received illegal close code")
@@ -238,7 +246,8 @@ case class Consolidation(maxMessageLength: Long, maskGen: Option[() => Int]) ext
             SocketPhases.close(commandPL, CloseCode.MessageTooBig, "Message exceeds maximum size of " + maxMessageLength)
           }else{
             val result = stored.fold(f)(x => x.copy(data = x.data ++ f.data))
-            if (result.opcode == OpCode.Text && !Utf8Checker.validate(result.data.toArray)) {
+
+            if (result.opcode == OpCode.Text && !validateUtf8(result.data)) {
               commandPL(Tcp.Close)
             }else{
               eventPL(FrameEvent(result.copy(FIN=true, data = result.data.compact)))

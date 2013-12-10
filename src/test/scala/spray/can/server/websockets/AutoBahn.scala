@@ -11,8 +11,10 @@ import akka.util.ByteString
 import spray.http.{HttpResponse, HttpHeaders, HttpMethods, HttpRequest}
 import akka.io.Tcp.Register
 import scala.concurrent.duration._
+import spray.http.HttpHeaders.{Connection, RawHeader, Host}
+
 class AutoBahn extends FreeSpec with Eventually{
-/*
+
   "Server" in {
     implicit val system = ActorSystem()
     implicit val ec = system.dispatcher
@@ -34,14 +36,14 @@ class AutoBahn extends FreeSpec with Eventually{
 
     IO(Sockets) ! Http.Bind(
       server,
-      "192.168.1.4",
+      "localhost",
       9001/*,
       settings=Some(ServerSettings(system).copy(sslEncryption = true))*/
     )
 
     Thread.sleep(100000000000000000L)
-  }*/
-  /*"Client" in {
+  }/*
+  "Client" in {
     //"/runCase?case=1&agent=cow/0.6.3"
     implicit val system = ActorSystem()
     implicit val patienceConfig = PatienceConfig(timeout = 2 seconds)
@@ -90,7 +92,7 @@ class AutoBahn extends FreeSpec with Eventually{
           if (!senders.contains(sender)){
             println("Client Closed " + c + sender)
             senders = senders + sender
-            IO(Sockets) ! Http.Connect("192.168.37.128", 9001)
+            IO(Sockets) ! Http.Connect("localhost", 9001)
           }
 
         case x =>
@@ -98,7 +100,7 @@ class AutoBahn extends FreeSpec with Eventually{
     }
 
     implicit val client = system.actorOf(Props(new SocketClient))
-    IO(Sockets) ! Http.Connect("192.168.37.128", 9001)
+    IO(Sockets) ! Http.Connect("localhost", 9001)
 
     Thread.sleep(100000000000000000L)
   }*/

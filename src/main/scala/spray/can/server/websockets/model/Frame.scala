@@ -1,8 +1,8 @@
 package spray.can.server.websockets.model
 
-import java.nio.ByteBuffer
+import java.nio.{ByteOrder, ByteBuffer}
 import java.io._
-import akka.util.ByteString
+import akka.util.{ByteStringBuilder, ByteString}
 import spray.io._
 import scala.Some
 import scala.Some
@@ -16,6 +16,8 @@ import java.util.regex.Pattern
  * Deals with serializing/deserializing Frames from Bytes
  */
 object Frame{
+
+  implicit val byteOrder = ByteOrder.BIG_ENDIAN
   /**
    * Mutates the given byte array by XORing it with the given Int mask
    */
@@ -70,8 +72,10 @@ object Frame{
     else if (in.available() < payloadLength) Incomplete
     else {
       val data = new Array[Byte](payloadLength.toInt)
+
       in.read(data)
-      for(m <- maskingKey) maskArray(data, m)
+
+      if(maskingKey.isDefined) maskArray(data, maskingKey.get)
 
       val frame = Frame(FIN, RSV.toByte, opcode, maskingKey, ByteString(data))
       Successful(frame)
@@ -80,13 +84,12 @@ object Frame{
 
   def write(f: Frame): ByteString = {
     import f._
-    val byteOutStream = new ByteArrayOutputStream()
-    val out = new DataOutputStream(byteOutStream)
 
-    out.writeByte(
-      (FIN.b << 7) |
+    val builder = new ByteStringBuilder
+    builder.putByte(
+      ((FIN.b << 7) |
       (RSV << 4) |
-      opcode.value
+      opcode.value).toByte
     )
     val b1 = (maskingKey.isDefined.b << 7) | (
       data.length match {
@@ -96,21 +99,26 @@ object Frame{
       }
     )
 
-    out.writeByte(b1)
+    builder.putByte(b1.toByte)
     (b1 & 127) match {
       case x if x <= 125 => ()
-      case 126 => out.writeShort(data.length)
-      case 127 => out.writeLong(data.length)
+      case 126 => builder.putShort(data.length)
+      case 127 => builder.putLong(data.length)
     }
 
-    for (m <- maskingKey){
-      out.writeInt(m)
+    if (maskingKey.isDefined) builder.putInt(maskingKey.get)
+
+
+
+    if (maskingKey.isDefined) {
+      val array = data.toArray
+      maskArray(array, maskingKey.get)
+      builder.putBytes(array)
+    }else{
+      builder.append(f.data)
     }
 
-    val array = data.toArray
-    for(m <- maskingKey) maskArray(array, m)
-    out.write(array)
-    ByteString(byteOutStream.toByteArray)
+    builder.result()
   }
 
 
