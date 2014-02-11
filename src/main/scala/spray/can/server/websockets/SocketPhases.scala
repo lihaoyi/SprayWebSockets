@@ -84,6 +84,7 @@ case class WebsocketFrontEnd(handler: ActorRef) extends PipelineStage{
         case Sockets.Upgraded           => commandPL(Pipeline.Tell(handler, Upgraded, receiveAdapter))
         case rtt: Sockets.RoundTripTime => commandPL(Pipeline.Tell(handler, rtt, receiveAdapter))
         case Http.MessageEvent(resp: spray.http.HttpResponse) => commandPL(Pipeline.Tell(handler, resp, receiveAdapter))
+        case AckEventWithReceiver(_, _, _) => // ignore to suppress a warning message 
         case x => eventPL(x)
       }
     }
