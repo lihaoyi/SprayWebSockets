@@ -181,7 +181,7 @@ All the messages that the `frameHandler` can expect to send/receive from the `So
 
 ###Close the Connection
 
-In order to close the connection, the `frameHandler` should send a `Frame` with `opcode = OpCode.ConnectionClose` to comply with the websocket protocol, before sending a `SocketServer.Close` message to actually terminate the TCP connection. The *Frame Handler* will then receive a `SocketServer.Closed` message. If the client initiates a close (whether cleanly via a `ConnectionClose` frame, or by abruptly cutting off the TCP connection) the `frameHandler` will just receive the `SocketServer.Closed` message directly.
+In order to close the connection, the `frameHandler` should send a `Frame` with `opcode = OpCode.ConnectionClose` to comply with the websocket protocol, before sending a `Tcp.Close` message to actually terminate the TCP connection. The *Frame Handler* will then receive a `Tcp.Closed` message. If the client initiates a close (whether cleanly via a `ConnectionClose` frame, or by abruptly cutting off the TCP connection) the `frameHandler` will just receive the `Tcp.Closed` message directly.
 
 Additional Configuration
 ------------------------
