@@ -15,6 +15,8 @@ import spray.http._
 import akka.util.CompactByteString
 import spray.can.Http.MessageCommand
 import spray.can.server.StatsSupport.StatsHolder
+import java.net.InetSocketAddress
+import spray.can.server.websockets.SocketPhases.FrameCommand
 
 /**
  * Sister class to HttpListener, but with a pipeline that supports websockets
@@ -27,11 +29,38 @@ private class SocketListener(bindCommander: ActorRef,
   private[this] val settingsX = bind.settings getOrElse ServerSettings(context.system)
   private[this] val statsHolderX = if (settingsX.statsSupport) Some(new StatsHolder) else None
   val pipelineStage = SocketListener.pipelineStage(settingsX, statsHolderX)
+
+  /**
+   * Used to let the frameHandler send back unwrapped Frames, which it
+   * will wrap before putting into the pipeline
+   */
+  private class SocketServerConnection(
+        tcpConnection: ActorRef,
+        userLevelListener: ActorRef,
+        pipelineStage: RawPipelineStage[ServerFrontend.Context with SslTlsContext],
+        remoteAddress: InetSocketAddress,
+        localAddress: InetSocketAddress,
+        settings: ServerSettings) extends HttpServerConnection(
+      tcpConnection,
+      userLevelListener,
+      pipelineStage,
+      remoteAddress,
+      localAddress,
+      settings) {
+
+    override def running(tcpConnection: ActorRef, pipelines: Pipelines): Receive = {
+      val sup = super.running(tcpConnection, pipelines)
+      ({
+        case f: model.Frame => pipelines.commandPipeline(FrameCommand(f))
+      }: Receive) orElse sup
+    }
+  }
+
   override def connected(tcpListener: ActorRef): Receive = {
     case Tcp.Connected(remoteAddress, localAddress) ⇒
       val conn = sender
       context.actorOf(
-        props = Props(new HttpServerConnection(conn, bind.listener, pipelineStage, remoteAddress, localAddress, settingsX))
+        props = Props(new SocketServerConnection(conn, bind.listener, pipelineStage, remoteAddress, localAddress, settingsX))
           .withDispatcher(httpSettings.ConnectionDispatcher),
         name = connectionCounterX.next().toString)
 
